@@ -1,14 +1,22 @@
 #include <iostream>
 #include <coroutine>
 
-class Task
+class Generator
 {
 public:
     struct promise_type
     {
-        Task get_return_object()
+        int value;
+
+        std::suspend_always await_transform(int value)
         {
-            return Task{std::coroutine_handle<promise_type>::from_promise(*this)};
+            this->value = value;
+            return {};
+        }
+
+        Generator get_return_object()
+        {
+            return Generator{std::coroutine_handle<promise_type>::from_promise(*this)};
         }
 
         auto initial_suspend() { return std::suspend_always{}; }
@@ -22,9 +30,15 @@ public:
 
     std::coroutine_handle<promise_type> co_handler;
 
-    Task(std::coroutine_handle<promise_type> handler) : co_handler(handler) {}
+    Generator(std::coroutine_handle<promise_type> handler) : co_handler(handler) {}
 
-    ~Task()
+    int next()
+    {
+        co_handler.resume();
+        return co_handler.promise().value;
+    }
+
+    ~Generator()
     {
         if (true == (bool)co_handler)
         {
@@ -33,19 +47,20 @@ public:
     }
 };
 
-Task foo()
+Generator foo()
 {
-    std::cout << "foo 1" << std::endl;
-    co_await std::suspend_always{};
-    std::cout << "foo 2" << std::endl;
+    int i = 0;
+    while (true)
+        co_await i++;
 }
 
 int main()
 {
-    Task task = foo();
-    std::cout << "\t main 1" << std::endl;
+    Generator task = foo();
+    std::cout << "\t main 1 - " << task.next() << std::endl;
+    std::cout << "\t main 2 - " << task.next() << std::endl;
+    std::cout << "\t main 3 - " << task.next() << std::endl;
 
-    task.co_handler.resume(); 
-    std::cout << "\t main 2" << std::endl;
-    task.co_handler.resume(); 
+    std::cout << "\t main 4" << std::endl;
+    task.next();
 }
