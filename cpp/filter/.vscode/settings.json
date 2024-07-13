@@ -1,0 +1,8 @@
+{
+    "files.associations": {
+        "functional": "cpp",
+        "iterator": "cpp",
+        "algorithm": "cpp",
+        "type_traits": "cpp"
+    }
+}
