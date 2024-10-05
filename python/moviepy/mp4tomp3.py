@@ -1,24 +1,22 @@
 #!/usr/bin/python3
 
 import os
-import moviepy.editor as mp
+import sys
+from moviepy.editor import *
 
-dir_path = "~/video/"
 
-mp4_files = []
-for (root, dir, files) in os.walk(dir_path):
-    for file in files:
-        mp4_files.append(os.path.join(root, file))
-mp4_files.sort()
+mp4_file = sys.argv[1] if len(sys.argv) > 1 else os.path.expanduser("combined.mp4")
 
-for file in mp4_files:
-    print(file) 
+if not os.path.exists(mp4_file):
+    print("There is no files ", mp4_file)
+    sys.exit()
 
-# MP4 파일들을 하나로 합칩니다.
-combined_clip = mp.concatenate_videoclips([mp.VideoFileClip(file) for file in mp4_files])
-combined_clip.write_videofile("combined.mp4", fps=15, audio_fps=44100)
 
-# 합친 동영상에서 오디오만 추출하여 MP3 파일로 저장합니다.
-combined_clip.audio.write_audiofile("output_audio.mp3", nbytes=1, fps=15, bitrate="16K")
+clip = VideoFileClip(mp4_file)
 
-print("소리만 추출하여 output_audio.mp3 파일로 저장되었습니다.")
+louder_clip = clip.audio.audio_normalize().volumex(10)
+
+print(f"FPS: {clip.fps}, channels: {clip.audio.nchannels}, maxvol: {clip.audio.max_volume()}, louder_maxvol: {louder_clip.max_volume()}")
+
+# clip.audio.write_audiofile("output_audio.mp3", 22050, ffmpeg_params=["-ac", "1"])
+louder_clip.write_audiofile("louder_audio.mp3", 22050, ffmpeg_params=["-ac", "1"])
