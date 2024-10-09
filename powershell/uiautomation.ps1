@@ -184,13 +184,13 @@ if ($null -ne $appWindow) {
     ClickControl -windowElement $appWindow -controlName "Five"
     ClickControl -windowElement $appWindow -controlName "Two"
     ClickControl -windowElement $appWindow -controlName "Six"
-    ClickControl -windowElement $appWindow -controlName "Multiply By"
+    ClickControl -windowElement $appWindow -controlName "Multiply by"
     ClickControl -windowElement $appWindow -controlName "Seven"
     ClickControl -windowElement $appWindow -controlName "Seven"
     ClickControl -windowElement $appWindow -controlName "Equals"
 
     # Wait for specific result text to appear
-    $resultText = WaitForTextInWindow -windowElement $appWindow -textToFind "CalculatorResults" -timeoutSeconds 30
+    $resultText = GetResultText -windowElement $appWindow -controlName "CalculatorResults" -timeoutSeconds 30
     if ($null -ne $resultText) {
         Write-Host "Result text: $resultText"
     }
