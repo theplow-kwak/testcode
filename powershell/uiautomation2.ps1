@@ -1,33 +1,175 @@
-# UIAutomation 모듈 로드
-Import-Module UIAutomation
+# Import necessary .NET namespaces for UI Automation
+Add-Type -AssemblyName UIAutomationClient
+Add-Type -AssemblyName System.Windows.Forms
 
-# 계산기 실행
-Start-Process calc
+# Function to wait for a condition with a timeout
+function WaitWithTimeout {
+    param (
+        [int]$timeoutSeconds = 30,
+        [scriptblock]$action
+    )
 
-# 3초 대기 (계산기 앱이 실행될 시간을 줌)
-Start-Sleep -Seconds 3
-
-# 계산기 창 가져오기
-$window = Get-UIAWindow -n "계산기"
-
-# 버튼 클릭 함수
-function Click-CalcButton {
-    param([string]$buttonName)
-    $window | Get-UIAButton -Name $buttonName | Invoke-UIAButtonClick
+    $startTime = [DateTime]::Now
+    while (([DateTime]::Now - $startTime).TotalSeconds -lt $timeoutSeconds) {
+        $result = & $action
+        if ($null -ne $result) {
+            return $result
+        }
+        Start-Sleep -Milliseconds 500
+    }
+    throw "Timeout of $timeoutSeconds seconds exceeded while waiting for condition."
 }
 
-# "5", "2", "6", "×", "7", "7", "=" 버튼 클릭
-Click-CalcButton "5"
-Click-CalcButton "2"
-Click-CalcButton "6"
-Click-CalcButton "곱하기"
-Click-CalcButton "7"
-Click-CalcButton "7"
-Click-CalcButton "같음"
+# Function to get the main application window by partial title
+function Get-ApplicationWindow {
+    param (
+        [string]$partialWindowTitle,
+        [int]$timeoutSeconds = 30
+    )
 
-# 1초 대기 (결과가 나올 시간을 줌)
-Start-Sleep -Seconds 1
+    return WaitWithTimeout -timeoutSeconds $timeoutSeconds -action {
+        $condition = [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, $partialWindowTitle, [System.Windows.Automation.PropertyConditionFlags]::IgnoreCase)
+        $desktop = [System.Windows.Automation.AutomationElement]::RootElement
+        $appWindow = $desktop.FindFirst([System.Windows.Automation.TreeScope]::Children, $condition)
+        if ($null -ne $appWindow) {
+            return $appWindow
+        }
+        return $null
+    }
+}
 
-# 결과 가져오기
-$result = $window | Get-UIAText -Name "계산 결과"
-Write-Host "계산 결과: $($result.Name)"
+# Function to click a control using AutomationId
+function ClickControlByAutomationId {
+    param (
+        [System.Windows.Automation.AutomationElement]$windowElement,
+        [string]$automationId
+    )
+
+    Write-Host "Searching for control with AutomationId '$automationId'..."
+
+    $condition = [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty, $automationId)
+    $control = $windowElement.FindFirst([System.Windows.Automation.TreeScope]::Subtree, $condition)
+
+    if ($null -ne $control) {
+        $controlType = $control.GetCurrentPropertyValue([System.Windows.Automation.AutomationElement]::ControlTypeProperty)
+
+        switch ($controlType) {
+            { $_ -eq [System.Windows.Automation.ControlType]::Button } {
+                $invokePattern = $control.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
+                $invokePattern.Invoke()
+                Write-Host "Button with AutomationId '$automationId' clicked."
+            }
+            { $_ -eq [System.Windows.Automation.ControlType]::RadioButton } {
+                $selectPattern = $control.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)
+                $selectPattern.Select()
+                Write-Host "RadioButton with AutomationId '$automationId' selected."
+            }
+            default {
+                Write-Error "Control with AutomationId '$automationId' is not a supported type (Button or RadioButton)."
+            }
+        }
+    } else {
+        Write-Error "Control with AutomationId '$automationId' not found."
+    }
+}
+
+# Function to get result from a specific control using AutomationId
+function GetResultTextByAutomationId {
+    param (
+        [System.Windows.Automation.AutomationElement]$windowElement,
+        [string]$automationId,
+        [int]$timeoutSeconds = 30
+    )
+
+    Write-Host "Searching for result text with AutomationId '$automationId'..."
+
+    return WaitWithTimeout -timeoutSeconds $timeoutSeconds -action {
+        $condition = [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty, $automationId)
+        $textControl = $windowElement.FindFirst([System.Windows.Automation.TreeScope]::Subtree, $condition)
+
+        if ($null -ne $textControl) {
+            $resultValue = $textControl.GetCurrentPropertyValue([System.Windows.Automation.AutomationElement]::NameProperty)
+            Write-Host "Result found: $resultValue"
+            return $resultValue
+        }
+        return $null
+    }
+}
+
+# Function to check for popup windows
+function CheckForPopup {
+    param (
+        [string]$popupTitlePart,
+        [int]$timeoutSeconds = 10
+    )
+
+    return WaitWithTimeout -timeoutSeconds $timeoutSeconds -action {
+        $desktop = [System.Windows.Automation.AutomationElement]::RootElement
+        $condition = [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, $popupTitlePart, [System.Windows.Automation.PropertyConditionFlags]::IgnoreCase)
+        $popupWindow = $desktop.FindFirst([System.Windows.Automation.TreeScope]::Children, $condition)
+
+        if ($null -ne $popupWindow) {
+            Write-Host "Popup window with title containing '$popupTitlePart' found."
+            return $popupWindow
+        }
+        return $null
+    }
+}
+
+# Function to close an application by its process ID
+function CloseApplicationByProcessId {
+    param (
+        [int]$processId
+    )
+
+    try {
+        Stop-Process -Id $processId -Force
+        Write-Host "Application with Process ID $processId has been closed."
+    } catch {
+        Write-Error "Failed to close application with Process ID $processId."
+    }
+}
+
+# Main automation flow
+
+# Start Calculator
+$calcProcess = Start-Process -FilePath "calc.exe" -PassThru
+Write-Host "Calculator started. Process ID: $($calcProcess.Id)"
+
+# Example: Find application window and interact with controls using AutomationId
+$partialWindowTitle = "Calculator"
+$timeoutSeconds = 20
+$appWindow = Get-ApplicationWindow -partialWindowTitle $partialWindowTitle -timeoutSeconds $timeoutSeconds
+
+if ($null -ne $appWindow) {
+    Write-Host "Application window found. Proceeding with actions..."
+
+    # Example of clicking buttons using AutomationId
+    ClickControlByAutomationId -windowElement $appWindow -automationId "num5Button"
+    ClickControlByAutomationId -windowElement $appWindow -automationId "num2Button"
+    ClickControlByAutomationId -windowElement $appWindow -automationId "num6Button"
+    ClickControlByAutomationId -windowElement $appWindow -automationId "multiplyButton"
+    ClickControlByAutomationId -windowElement $appWindow -automationId "num7Button"
+    ClickControlByAutomationId -windowElement $appWindow -automationId "num7Button"
+    ClickControlByAutomationId -windowElement $appWindow -automationId "equalButton"
+
+    # Get the result text from the display using AutomationId
+    $resultText = GetResultTextByAutomationId -windowElement $appWindow -automationId "CalculatorResults" -timeoutSeconds 30
+    if ($null -ne $resultText) {
+        Write-Host "Final result from the calculator: $resultText"
+    } else {
+        Write-Error "Failed to retrieve the result text."
+    }
+
+    # Check for popup
+    $popupWindow = CheckForPopup -popupTitlePart "Alert" -timeoutSeconds 10
+    if ($null -ne $popupWindow) {
+        Write-Host "Popup detected and handled."
+    }
+
+    # Stop the Calculator process
+    CloseApplicationByProcessId -processId $calcProcess.Id
+
+} else {
+    Write-Error "Could not find the application window."
+}
