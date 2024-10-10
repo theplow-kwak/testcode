@@ -22,22 +22,25 @@ function WaitWithTimeout {
 }
 
 # Function to get the main application window by partial title
-function Get-ApplicationWindow {
-    param (
-        [string]$partialWindowTitle,
-        [int]$timeoutSeconds = 30
-    )
-
-    return WaitWithTimeout -timeoutSeconds $timeoutSeconds -action {
-        $condition = [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, $partialWindowTitle, [System.Windows.Automation.PropertyConditionFlags]::IgnoreCase)
-        $desktop = [System.Windows.Automation.AutomationElement]::RootElement
-        $appWindow = $desktop.FindFirst([System.Windows.Automation.TreeScope]::Children, $condition)
-        if ($null -ne $appWindow) {
-            return $appWindow
-        }
-        return $null
-    }
-}
+function Get-ApplicationWindow { 
+    param ( 
+        [string]$partialWindowTitle, 
+        [int]$timeoutSeconds = 30 
+    ) 
+    
+    return WaitWithTimeout -timeoutSeconds $timeoutSeconds -action { 
+        $rootElement = [System.Windows.Automation.AutomationElement]::RootElement 
+        $windows = $rootElement.FindAll([System.Windows.Automation.TreeScope]::Children, [System.Windows.Automation.Condition]::TrueCondition) 
+        foreach ($window in $windows) { 
+            $windowName = $window.GetCurrentPropertyValue([System.Windows.Automation.AutomationElement]::NameProperty) 
+            if ($windowName -like "*$partialWindowTitle*") { 
+                Write-Host "Window found: $windowName" 
+                return $window 
+            } 
+        } 
+        return $null 
+    } 
+} 
 
 # Function to click a control using AutomationId or ControlName
 function ClickControl {
