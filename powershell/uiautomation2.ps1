@@ -38,16 +38,24 @@ function Get-ApplicationWindow {
     }
 }
 
-# Function to click a control using AutomationId
-function ClickControlByAutomationId {
+# Function to click a control using AutomationId or ControlName
+function ClickControl {
     param (
         [System.Windows.Automation.AutomationElement]$windowElement,
-        [string]$automationId
+        [string]$automationId = $null,
+        [string]$controlName = $null
     )
 
-    Write-Host "Searching for control with AutomationId '$automationId'..."
+    Write-Host "Searching for control with AutomationId '$automationId' or ControlName '$controlName'..."
 
-    $condition = [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty, $automationId)
+    if ($null -ne $automationId) {
+        $condition = [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty, $automationId)
+    } elseif ($null -ne $controlName) {
+        $condition = [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, $controlName)
+    } else {
+        throw "Either automationId or controlName must be provided."
+    }
+
     $control = $windowElement.FindFirst([System.Windows.Automation.TreeScope]::Subtree, $condition)
 
     if ($null -ne $control) {
@@ -57,34 +65,42 @@ function ClickControlByAutomationId {
             { $_ -eq [System.Windows.Automation.ControlType]::Button } {
                 $invokePattern = $control.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
                 $invokePattern.Invoke()
-                Write-Host "Button with AutomationId '$automationId' clicked."
+                Write-Host "Button clicked."
             }
             { $_ -eq [System.Windows.Automation.ControlType]::RadioButton } {
                 $selectPattern = $control.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)
                 $selectPattern.Select()
-                Write-Host "RadioButton with AutomationId '$automationId' selected."
+                Write-Host "RadioButton selected."
             }
             default {
-                Write-Error "Control with AutomationId '$automationId' is not a supported type (Button or RadioButton)."
+                Write-Error "Control is not a supported type (Button or RadioButton)."
             }
         }
     } else {
-        Write-Error "Control with AutomationId '$automationId' not found."
+        Write-Error "Control not found."
     }
 }
 
-# Function to get result from a specific control using AutomationId
-function GetResultTextByAutomationId {
+# Function to get result text from a specific control using AutomationId or ControlName
+function GetResultText {
     param (
         [System.Windows.Automation.AutomationElement]$windowElement,
-        [string]$automationId,
+        [string]$automationId = $null,
+        [string]$controlName = $null,
         [int]$timeoutSeconds = 30
     )
 
-    Write-Host "Searching for result text with AutomationId '$automationId'..."
+    Write-Host "Searching for result text with AutomationId '$automationId' or ControlName '$controlName'..."
 
     return WaitWithTimeout -timeoutSeconds $timeoutSeconds -action {
-        $condition = [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty, $automationId)
+        if ($null -ne $automationId) {
+            $condition = [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty, $automationId)
+        } elseif ($null -ne $controlName) {
+            $condition = [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, $controlName)
+        } else {
+            throw "Either automationId or controlName must be provided."
+        }
+
         $textControl = $windowElement.FindFirst([System.Windows.Automation.TreeScope]::Subtree, $condition)
 
         if ($null -ne $textControl) {
@@ -136,7 +152,7 @@ function CloseApplicationByProcessId {
 $calcProcess = Start-Process -FilePath "calc.exe" -PassThru
 Write-Host "Calculator started. Process ID: $($calcProcess.Id)"
 
-# Example: Find application window and interact with controls using AutomationId
+# Example: Find application window and interact with controls using AutomationId or ControlName
 $partialWindowTitle = "Calculator"
 $timeoutSeconds = 20
 $appWindow = Get-ApplicationWindow -partialWindowTitle $partialWindowTitle -timeoutSeconds $timeoutSeconds
@@ -144,17 +160,17 @@ $appWindow = Get-ApplicationWindow -partialWindowTitle $partialWindowTitle -time
 if ($null -ne $appWindow) {
     Write-Host "Application window found. Proceeding with actions..."
 
-    # Example of clicking buttons using AutomationId
-    ClickControlByAutomationId -windowElement $appWindow -automationId "num5Button"
-    ClickControlByAutomationId -windowElement $appWindow -automationId "num2Button"
-    ClickControlByAutomationId -windowElement $appWindow -automationId "num6Button"
-    ClickControlByAutomationId -windowElement $appWindow -automationId "multiplyButton"
-    ClickControlByAutomationId -windowElement $appWindow -automationId "num7Button"
-    ClickControlByAutomationId -windowElement $appWindow -automationId "num7Button"
-    ClickControlByAutomationId -windowElement $appWindow -automationId "equalButton"
+    # Example of clicking buttons using AutomationId or ControlName
+    ClickControl -windowElement $appWindow -automationId "num5Button"
+    ClickControl -windowElement $appWindow -automationId "num2Button"
+    ClickControl -windowElement $appWindow -automationId "num6Button"
+    ClickControl -windowElement $appWindow -automationId "multiplyButton"
+    ClickControl -windowElement $appWindow -automationId "num7Button"
+    ClickControl -windowElement $appWindow -automationId "num7Button"
+    ClickControl -windowElement $appWindow -automationId "equalButton"
 
-    # Get the result text from the display using AutomationId
-    $resultText = GetResultTextByAutomationId -windowElement $appWindow -automationId "CalculatorResults" -timeoutSeconds 30
+    # Get the result text from the display using AutomationId or ControlName
+    $resultText = GetResultText -windowElement $appWindow -automationId "CalculatorResults" -timeoutSeconds 30
     if ($null -ne $resultText) {
         Write-Host "Final result from the calculator: $resultText"
     } else {

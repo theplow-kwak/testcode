@@ -1,63 +1,64 @@
+# Import necessary .NET namespaces for UI Automation
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName System.Windows.Forms
 
-# Utility function to handle timeouts
+# Function to wait for a condition with a timeout
 function WaitWithTimeout {
     param (
-        [int]$timeoutSeconds,
+        [int]$timeoutSeconds = 30,
         [scriptblock]$action
     )
 
-    $startTime = Get-Date
-    $endTime = $startTime.AddSeconds($timeoutSeconds)
-
-    while ((Get-Date) -lt $endTime) {
+    $startTime = [DateTime]::Now
+    while (([DateTime]::Now - $startTime).TotalSeconds -lt $timeoutSeconds) {
         $result = & $action
         if ($null -ne $result) {
             return $result
         }
-        Start-Sleep -Seconds 1
+        Start-Sleep -Milliseconds 500
     }
-
-    Write-Error "Timeout after $timeoutSeconds seconds."
+    Write-Error "Timeout of $timeoutSeconds seconds exceeded while waiting for condition."
     return $null
 }
 
-# Find application window by partial window title (with timeout)
+# Function to get the main application window by partial title
 function Get-ApplicationWindow {
     param (
         [string]$partialWindowTitle,
         [int]$timeoutSeconds = 30
     )
 
-    Write-Host "Searching for window with title containing '$partialWindowTitle'..."
-
     return WaitWithTimeout -timeoutSeconds $timeoutSeconds -action {
-        $rootElement = [System.Windows.Automation.AutomationElement]::RootElement
-        $windows = $rootElement.FindAll([System.Windows.Automation.TreeScope]::Children, [System.Windows.Automation.Condition]::TrueCondition)
-
-        foreach ($window in $windows) {
-            $windowName = $window.GetCurrentPropertyValue([System.Windows.Automation.AutomationElement]::NameProperty)
-
-            if ($windowName -like "*$partialWindowTitle*") {
-                Write-Host "Window found: $windowName"
-                return $window
-            }
+        $condition = [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, $partialWindowTitle, [System.Windows.Automation.PropertyConditionFlags]::IgnoreCase)
+        $desktop = [System.Windows.Automation.AutomationElement]::RootElement
+        $appWindow = $desktop.FindFirst([System.Windows.Automation.TreeScope]::Children, $condition)
+        if ($null -ne $appWindow) {
+            return $appWindow
         }
         return $null
     }
 }
 
-# Universal function to click Button or select RadioButton
+# Function to click a control using AutomationId or ControlName
 function ClickControl {
     param (
         [System.Windows.Automation.AutomationElement]$windowElement,
-        [string]$controlName
+        [string]$automationId = $null,
+        [string]$controlName = $null
     )
 
-    Write-Host "Searching for control: '$controlName'..."
+    Write-Host "Searching for control with AutomationId '$automationId' or ControlName '$controlName'..."
 
-    $condition = [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, $controlName)
+    if (-not [string]::IsNullOrEmpty($automationId)) {
+        $condition = [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty, $automationId)
+        $ButtonName = $automationId
+    } elseif (-not [string]::IsNullOrEmpty($controlName)) {
+        $condition = [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, $controlName)
+        $ButtonName = $controlName
+    } else {
+        throw "Either automationId or controlName must be provided."
+    }
+
     $control = $windowElement.FindFirst([System.Windows.Automation.TreeScope]::Subtree, $condition)
 
     if ($null -ne $control) {
@@ -67,19 +68,50 @@ function ClickControl {
             { $_ -eq [System.Windows.Automation.ControlType]::Button } {
                 $invokePattern = $control.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
                 $invokePattern.Invoke()
-                Write-Host "Button '$controlName' clicked."
+                Write-Host "Button '$ButtonName' clicked."
             }
             { $_ -eq [System.Windows.Automation.ControlType]::RadioButton } {
                 $selectPattern = $control.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)
                 $selectPattern.Select()
-                Write-Host "RadioButton '$controlName' selected."
+                Write-Host "RadioButton '$ButtonName' selected."
             }
             default {
-                Write-Error "Control '$controlName' is not a supported type (Button or RadioButton)."
+                Write-Error "Control '$ButtonName' is not a supported type (Button or RadioButton)."
             }
         }
     } else {
-        Write-Error "Control '$controlName' not found."
+        Write-Error "Control '$ButtonName' not found."
+    }
+}
+
+# Function to get result text from a specific control using AutomationId or ControlName
+function GetResultText {
+    param (
+        [System.Windows.Automation.AutomationElement]$windowElement,
+        [string]$automationId = $null,
+        [string]$controlName = $null,
+        [int]$timeoutSeconds = 30
+    )
+
+    Write-Host "Searching for result text with AutomationId '$automationId' or ControlName '$controlName'..."
+
+    return WaitWithTimeout -timeoutSeconds $timeoutSeconds -action {
+        if (-not [string]::IsNullOrEmpty($automationId)) {
+            $condition = [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty, $automationId)
+        } elseif (-not [string]::IsNullOrEmpty($controlName)) {
+            $condition = [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, $controlName)
+        } else {
+            throw "Either automationId or controlName must be provided."
+        }
+
+        $textControl = $windowElement.FindFirst([System.Windows.Automation.TreeScope]::Subtree, $condition)
+
+        if ($null -ne $textControl) {
+            $resultValue = $textControl.GetCurrentPropertyValue([System.Windows.Automation.AutomationElement]::NameProperty)
+            Write-Host "Result found: $resultValue"
+            return $resultValue
+        }
+        return $null
     }
 }
 
@@ -109,70 +141,47 @@ function WaitForTextInWindow {
     }
 }
 
-# Retrieve any text from the window (with timeout)
-function GetTextFromWindow {
-    param (
-        [System.Windows.Automation.AutomationElement]$windowElement,
-        [int]$timeoutSeconds = 30
-    )
-
-    Write-Host "Retrieving text from window..."
-
-    return WaitWithTimeout -timeoutSeconds $timeoutSeconds -action {
-        $condition = [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Text)
-        $textElements = $windowElement.FindAll([System.Windows.Automation.TreeScope]::Subtree, $condition)
-
-        if ($textElements.Count -gt 0) {
-            $texts = @()
-            foreach ($element in $textElements) {
-                $textValue = $element.GetCurrentPropertyValue([System.Windows.Automation.AutomationElement]::NameProperty)
-                $texts += $textValue
-            }
-            Write-Host "Text found: $($texts -join ', ')"
-            return $texts -join ', '
-        }
-        return $null
-    }
-}
-
-# Function to get result from a specific control in the window
-function GetResultText {
-    param (
-        [System.Windows.Automation.AutomationElement]$windowElement,
-        [string]$controlName,   # The name of the result text control (e.g., "Result" or "Display")
-        [int]$timeoutSeconds = 30
-    )
-
-    Write-Host "Searching for result text '$controlName'..."
-
-    return WaitWithTimeout -timeoutSeconds $timeoutSeconds -action {
-        # Find the result Text control by its name
-        $condition = [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, $controlName)
-        $textControl = $windowElement.FindFirst([System.Windows.Automation.TreeScope]::Subtree, $condition)
-
-        if ($null -ne $textControl) {
-            $resultValue = $textControl.GetCurrentPropertyValue([System.Windows.Automation.AutomationElement]::NameProperty)
-            Write-Host "Result found: $resultValue"
-            return $resultValue
-        }
-        return $null
-    }
-}
-
-# Detect a popup window with a partial title (with timeout)
+# Function to check for popup windows
 function CheckForPopup {
     param (
         [string]$popupTitlePart,
         [int]$timeoutSeconds = 10
     )
 
-    Write-Host "Waiting for popup with title containing '$popupTitlePart'..."
+    return WaitWithTimeout -timeoutSeconds $timeoutSeconds -action {
+        $desktop = [System.Windows.Automation.AutomationElement]::RootElement
+        $condition = [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, $popupTitlePart, [System.Windows.Automation.PropertyConditionFlags]::IgnoreCase)
+        $popupWindow = $desktop.FindFirst([System.Windows.Automation.TreeScope]::Children, $condition)
 
-    return Get-ApplicationWindow -partialWindowTitle $popupTitlePart -timeoutSeconds $timeoutSeconds
+        if ($null -ne $popupWindow) {
+            Write-Host "Popup window with title containing '$popupTitlePart' found."
+            return $popupWindow
+        }
+        return $null
+    }
 }
 
-# Example: Find application window and interact with controls
-Start-Process -FilePath calc
+# Function to close an application by its process ID
+function CloseApplicationByProcessId {
+    param (
+        [int]$processId
+    )
+
+    try {
+        Stop-Process -Id $processId -Force
+        Write-Host "Application with Process ID $processId has been closed."
+    } catch {
+        Write-Error "Failed to close application with Process ID $processId."
+    }
+}
+
+# Main automation flow
+
+# Start Calculator
+$calcProcess = Start-Process -FilePath "calc.exe" -PassThru
+Write-Host "Calculator started. Process ID: $($calcProcess.Id)"
+
+# Example: Find application window and interact with controls using AutomationId or ControlName
 $partialWindowTitle = "Calculator"
 $timeoutSeconds = 20
 $appWindow = Get-ApplicationWindow -partialWindowTitle $partialWindowTitle -timeoutSeconds $timeoutSeconds
@@ -183,22 +192,18 @@ if ($null -ne $appWindow) {
     # Example of clicking buttons and selecting a radio button
     ClickControl -windowElement $appWindow -controlName "Five"
     ClickControl -windowElement $appWindow -controlName "Two"
-    ClickControl -windowElement $appWindow -controlName "Six"
+    ClickControl -windowElement $appWindow -automationId "num6Button"
     ClickControl -windowElement $appWindow -controlName "Multiply by"
     ClickControl -windowElement $appWindow -controlName "Seven"
-    ClickControl -windowElement $appWindow -controlName "Seven"
+    ClickControl -windowElement $appWindow -automationId "num7Button"
     ClickControl -windowElement $appWindow -controlName "Equals"
 
-    # Wait for specific result text to appear
-    $resultText = GetResultText -windowElement $appWindow -controlName "CalculatorResults" -timeoutSeconds 30
+    # Get the result text from the display using AutomationId or ControlName
+    $resultText = GetResultText -windowElement $appWindow -automationId "CalculatorResults" -timeoutSeconds 30
     if ($null -ne $resultText) {
-        Write-Host "Result text: $resultText"
-    }
-
-    # Retrieve any text from the window
-    $retrievedText = GetTextFromWindow -windowElement $appWindow -timeoutSeconds 30
-    if ($null -ne $retrievedText) {
-        Write-Host "Text retrieved: $retrievedText"
+        Write-Host "Final result from the calculator: $resultText"
+    } else {
+        Write-Error "Failed to retrieve the result text."
     }
 
     # Check for popup
@@ -206,6 +211,9 @@ if ($null -ne $appWindow) {
     if ($null -ne $popupWindow) {
         Write-Host "Popup detected and handled."
     }
+
+    # Stop the Calculator process
+    CloseApplicationByProcessId -processId $calcProcess.Id
 
 } else {
     Write-Error "Could not find the application window."
