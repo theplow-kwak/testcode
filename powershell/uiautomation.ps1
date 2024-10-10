@@ -1,10 +1,15 @@
+# Import necessary .NET namespaces for UI Automation
+Add-Type -AssemblyName UIAutomationClient
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+
 # Add necessary .NET types for window handling and screenshot
 Add-Type @"
     using System;
     using System.Runtime.InteropServices;
     using System.Drawing;
-    using System.Drawing.Imaging;
-    using System.Windows.Forms;
+    // using System.Drawing.Imaging;
+    // using System.Windows.Forms;
 
     public class WindowHelper {
         [DllImport("user32.dll")]
@@ -14,6 +19,9 @@ Add-Type @"
         [return: MarshalAs(UnmanagedType.Bool)]
         public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
 
+        [DllImport("user32.dll", SetLastError = true)]
+        public static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
+
         [DllImport("user32.dll")]
         public static extern IntPtr GetWindowRect(IntPtr hWnd, ref RECT rect);
 
@@ -22,6 +30,7 @@ Add-Type @"
 
         public const int SW_RESTORE = 9;
         public const int SW_SHOW = 5;
+        public const int SW_MINIMIZE = 6;
 
         public struct RECT {
             public int Left;
@@ -30,24 +39,24 @@ Add-Type @"
             public int Bottom;
         }
 
-        public static Bitmap CaptureWindow(IntPtr hWnd) {
-            RECT rect = new RECT();
-            GetWindowRect(hWnd, ref rect);
-            int width = rect.Right - rect.Left;
-            int height = rect.Bottom - rect.Top;
+//        public static Bitmap CaptureWindow(IntPtr hWnd) {
+//            RECT rect = new RECT();
+//            GetWindowRect(hWnd, ref rect);
+//            int width = rect.Right - rect.Left;
+//            int height = rect.Bottom - rect.Top;
 
-            Bitmap bitmap = new Bitmap(width, height, PixelFormat.Format32bppArgb);
-            using (Graphics g = Graphics.FromImage(bitmap)) {
-                IntPtr hdc = g.GetHdc();
-                PrintWindow(hWnd, hdc, 0);
-                g.ReleaseHdc(hdc);
-            }
-            return bitmap;
-        }
+//            Bitmap bitmap = new Bitmap(width, height, PixelFormat.Format32bppArgb);
+//            using (Graphics g = Graphics.FromImage(bitmap)) {
+//                IntPtr hdc = g.GetHdc();
+//                PrintWindow(hWnd, hdc, 0);
+//                g.ReleaseHdc(hdc);
+//            }
+//            return bitmap;
+//        }
 
-        public static void SaveScreenshot(string filePath, Bitmap bitmap) {
-            bitmap.Save(filePath, ImageFormat.Jpeg);  # Save as JPG
-        }
+//        public static void SaveScreenshot(string filePath, Bitmap bitmap) {
+//            bitmap.Save(filePath, ImageFormat.Jpeg);  // Save as JPG
+//        }
 
         public static void RestoreAndBringToFront(IntPtr hWnd) {
             // Restore the window if it is minimized
@@ -55,24 +64,39 @@ Add-Type @"
             // Bring the window to the foreground
             SetForegroundWindow(hWnd);
         }
+
+        public static void MinimizeWindow(IntPtr hWnd) {
+            // Minimize the window
+            ShowWindow(hWnd, SW_MINIMIZE);
+        }
+
+        public static void MoveWindow(IntPtr hWnd, int x, int y) {
+            RECT rect = new RECT();
+            GetWindowRect(hWnd, ref rect);
+            int width = rect.Right - rect.Left;
+            int height = rect.Bottom - rect.Top;
+
+            // Move the window to the specified coordinates
+            SetWindowPos(hWnd, IntPtr.Zero, x, y, width, height, 0);
+        }
     }
 "@
 
 # Function to capture and save a screenshot of a window using its handle
-function Capture-WindowScreenshot {
-    param (
-        [IntPtr]$windowHandle,
-        [string]$outputFilePath
-    )
+# function Capture-WindowScreenshot {
+#     param (
+#         [IntPtr]$windowHandle,
+#         [string]$outputFilePath
+#     )
 
-    # Capture the window as a bitmap
-    $bitmap = [WindowHelper]::CaptureWindow($windowHandle)
+#     # Capture the window as a bitmap
+#     $bitmap = [WindowHelper]::CaptureWindow($windowHandle)
 
-    # Save the screenshot to the specified file path in JPG format
-    [WindowHelper]::SaveScreenshot($outputFilePath, $bitmap)
+#     # Save the screenshot to the specified file path in JPG format
+#     [WindowHelper]::SaveScreenshot($outputFilePath, $bitmap)
 
-    Write-Host "Screenshot saved to $outputFilePath as JPG"
-}
+#     Write-Host "Screenshot saved to $outputFilePath as JPG"
+# }
 
 # Function to get the native window handle (HWND) from AutomationElement
 function Get-NativeWindowHandle {
@@ -99,10 +123,6 @@ function Restore-WindowAndBringToFront {
     [WindowHelper]::RestoreAndBringToFront($windowHandle)
 }
 
-# Import necessary .NET namespaces for UI Automation
-Add-Type -AssemblyName UIAutomationClient
-Add-Type -AssemblyName System.Windows.Forms
-
 # Function to wait for a condition with a timeout
 function WaitWithTimeout {
     param (
@@ -123,25 +143,25 @@ function WaitWithTimeout {
 }
 
 # Function to get the main application window by partial title
-function Get-ApplicationWindow { 
-    param ( 
-        [string]$partialWindowTitle, 
-        [int]$timeoutSeconds = 30 
-    ) 
-    
-    return WaitWithTimeout -timeoutSeconds $timeoutSeconds -action { 
-        $rootElement = [System.Windows.Automation.AutomationElement]::RootElement 
-        $windows = $rootElement.FindAll([System.Windows.Automation.TreeScope]::Children, [System.Windows.Automation.Condition]::TrueCondition) 
-        foreach ($window in $windows) { 
-            # $windowName = $window.GetCurrentPropertyValue([System.Windows.Automation.AutomationElement]::NameProperty) 
-            if ($window.Current.Name -like "*$partialWindowTitle*") { 
-                Write-Host "Window found: $windowName" 
-                return $window 
-            } 
-        } 
-        return $null 
-    } 
-} 
+function Get-ApplicationWindow {
+    param (
+        [string]$partialWindowTitle,
+        [int]$timeoutSeconds = 30
+    )
+
+    return WaitWithTimeout -timeoutSeconds $timeoutSeconds -action {
+        $rootElement = [System.Windows.Automation.AutomationElement]::RootElement
+        $windows = $rootElement.FindAll([System.Windows.Automation.TreeScope]::Children, [System.Windows.Automation.Condition]::TrueCondition)
+        foreach ($window in $windows) {
+            # $windowName = $window.GetCurrentPropertyValue([System.Windows.Automation.AutomationElement]::NameProperty)
+            if ($window.Current.Name -like "*$partialWindowTitle*") {
+                Write-Host "Window found: $windowName"
+                return $window
+            }
+        }
+        return $null
+    }
+}
 
 # Function to click a control using AutomationId or ControlName
 function ClickControl {

@@ -48,11 +48,15 @@ function ClickControl {
 
     Write-Host "Searching for control with AutomationId '$automationId' or ControlName '$controlName'..."
 
-    if ($null -ne $automationId) {
+    if (-not [string]::IsNullOrEmpty($automationId)) {
         $condition = [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty, $automationId)
-    } elseif ($null -ne $controlName) {
+        $ButtonName = $automationId
+    }
+    elseif (-not [string]::IsNullOrEmpty($controlName)) {
         $condition = [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, $controlName)
-    } else {
+        $ButtonName = $controlName
+    }
+    else {
         throw "Either automationId or controlName must be provided."
     }
 
@@ -65,19 +69,20 @@ function ClickControl {
             { $_ -eq [System.Windows.Automation.ControlType]::Button } {
                 $invokePattern = $control.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
                 $invokePattern.Invoke()
-                Write-Host "Button clicked."
+                Write-Host "Button '$ButtonName' clicked."
             }
             { $_ -eq [System.Windows.Automation.ControlType]::RadioButton } {
                 $selectPattern = $control.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)
                 $selectPattern.Select()
-                Write-Host "RadioButton selected."
+                Write-Host "RadioButton '$ButtonName' selected."
             }
             default {
-                Write-Error "Control is not a supported type (Button or RadioButton)."
+                Write-Error "Control '$ButtonName' is not a supported type (Button or RadioButton)."
             }
         }
-    } else {
-        Write-Error "Control not found."
+    }
+    else {
+        Write-Error "Control '$ButtonName' not found."
     }
 }
 
@@ -93,11 +98,13 @@ function GetResultText {
     Write-Host "Searching for result text with AutomationId '$automationId' or ControlName '$controlName'..."
 
     return WaitWithTimeout -timeoutSeconds $timeoutSeconds -action {
-        if ($null -ne $automationId) {
+        if (-not [string]::IsNullOrEmpty($automationId)) {
             $condition = [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty, $automationId)
-        } elseif ($null -ne $controlName) {
+        }
+        elseif (-not [string]::IsNullOrEmpty($controlName)) {
             $condition = [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, $controlName)
-        } else {
+        }
+        else {
             throw "Either automationId or controlName must be provided."
         }
 
@@ -141,7 +148,8 @@ function CloseApplicationByProcessId {
     try {
         Stop-Process -Id $processId -Force
         Write-Host "Application with Process ID $processId has been closed."
-    } catch {
+    }
+    catch {
         Write-Error "Failed to close application with Process ID $processId."
     }
 }
@@ -173,7 +181,8 @@ if ($null -ne $appWindow) {
     $resultText = GetResultText -windowElement $appWindow -automationId "CalculatorResults" -timeoutSeconds 30
     if ($null -ne $resultText) {
         Write-Host "Final result from the calculator: $resultText"
-    } else {
+    }
+    else {
         Write-Error "Failed to retrieve the result text."
     }
 
@@ -186,6 +195,7 @@ if ($null -ne $appWindow) {
     # Stop the Calculator process
     CloseApplicationByProcessId -processId $calcProcess.Id
 
-} else {
+}
+else {
     Write-Error "Could not find the application window."
 }
