@@ -1,3 +1,104 @@
+# Add necessary .NET types for window handling and screenshot
+Add-Type @"
+    using System;
+    using System.Runtime.InteropServices;
+    using System.Drawing;
+    using System.Drawing.Imaging;
+    using System.Windows.Forms;
+
+    public class WindowHelper {
+        [DllImport("user32.dll")]
+        public static extern bool SetForegroundWindow(IntPtr hWnd);
+
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+
+        [DllImport("user32.dll")]
+        public static extern IntPtr GetWindowRect(IntPtr hWnd, ref RECT rect);
+
+        [DllImport("user32.dll")]
+        public static extern bool PrintWindow(IntPtr hWnd, IntPtr hDC, uint nFlags);
+
+        public const int SW_RESTORE = 9;
+        public const int SW_SHOW = 5;
+
+        public struct RECT {
+            public int Left;
+            public int Top;
+            public int Right;
+            public int Bottom;
+        }
+
+        public static Bitmap CaptureWindow(IntPtr hWnd) {
+            RECT rect = new RECT();
+            GetWindowRect(hWnd, ref rect);
+            int width = rect.Right - rect.Left;
+            int height = rect.Bottom - rect.Top;
+
+            Bitmap bitmap = new Bitmap(width, height, PixelFormat.Format32bppArgb);
+            using (Graphics g = Graphics.FromImage(bitmap)) {
+                IntPtr hdc = g.GetHdc();
+                PrintWindow(hWnd, hdc, 0);
+                g.ReleaseHdc(hdc);
+            }
+            return bitmap;
+        }
+
+        public static void SaveScreenshot(string filePath, Bitmap bitmap) {
+            bitmap.Save(filePath, ImageFormat.Jpeg);  # Save as JPG
+        }
+
+        public static void RestoreAndBringToFront(IntPtr hWnd) {
+            // Restore the window if it is minimized
+            ShowWindow(hWnd, SW_RESTORE);
+            // Bring the window to the foreground
+            SetForegroundWindow(hWnd);
+        }
+    }
+"@
+
+# Function to capture and save a screenshot of a window using its handle
+function Capture-WindowScreenshot {
+    param (
+        [IntPtr]$windowHandle,
+        [string]$outputFilePath
+    )
+
+    # Capture the window as a bitmap
+    $bitmap = [WindowHelper]::CaptureWindow($windowHandle)
+
+    # Save the screenshot to the specified file path in JPG format
+    [WindowHelper]::SaveScreenshot($outputFilePath, $bitmap)
+
+    Write-Host "Screenshot saved to $outputFilePath as JPG"
+}
+
+# Function to get the native window handle (HWND) from AutomationElement
+function Get-NativeWindowHandle {
+    param (
+        [System.Windows.Automation.AutomationElement]$automationElement
+    )
+
+    $handle = $automationElement.Current.NativeWindowHandle
+    if ($handle -ne 0) {
+        return [IntPtr]::new($handle)
+    }
+    else {
+        throw "Failed to get the native window handle."
+    }
+}
+
+# Function to restore and bring the application window to the front
+function Restore-WindowAndBringToFront {
+    param (
+        [IntPtr]$windowHandle
+    )
+
+    # Call the helper function to restore and activate the window
+    [WindowHelper]::RestoreAndBringToFront($windowHandle)
+}
+
 # Import necessary .NET namespaces for UI Automation
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName System.Windows.Forms
@@ -32,8 +133,8 @@ function Get-ApplicationWindow {
         $rootElement = [System.Windows.Automation.AutomationElement]::RootElement 
         $windows = $rootElement.FindAll([System.Windows.Automation.TreeScope]::Children, [System.Windows.Automation.Condition]::TrueCondition) 
         foreach ($window in $windows) { 
-            $windowName = $window.GetCurrentPropertyValue([System.Windows.Automation.AutomationElement]::NameProperty) 
-            if ($windowName -like "*$partialWindowTitle*") { 
+            # $windowName = $window.GetCurrentPropertyValue([System.Windows.Automation.AutomationElement]::NameProperty) 
+            if ($window.Current.Name -like "*$partialWindowTitle*") { 
                 Write-Host "Window found: $windowName" 
                 return $window 
             } 
@@ -55,10 +156,12 @@ function ClickControl {
     if (-not [string]::IsNullOrEmpty($automationId)) {
         $condition = [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty, $automationId)
         $ButtonName = $automationId
-    } elseif (-not [string]::IsNullOrEmpty($controlName)) {
+    }
+    elseif (-not [string]::IsNullOrEmpty($controlName)) {
         $condition = [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, $controlName)
         $ButtonName = $controlName
-    } else {
+    }
+    else {
         throw "Either automationId or controlName must be provided."
     }
 
@@ -82,7 +185,8 @@ function ClickControl {
                 Write-Error "Control '$ButtonName' is not a supported type (Button or RadioButton)."
             }
         }
-    } else {
+    }
+    else {
         Write-Error "Control '$ButtonName' not found."
     }
 }
@@ -101,9 +205,11 @@ function GetResultText {
     return WaitWithTimeout -timeoutSeconds $timeoutSeconds -action {
         if (-not [string]::IsNullOrEmpty($automationId)) {
             $condition = [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty, $automationId)
-        } elseif (-not [string]::IsNullOrEmpty($controlName)) {
+        }
+        elseif (-not [string]::IsNullOrEmpty($controlName)) {
             $condition = [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, $controlName)
-        } else {
+        }
+        else {
             throw "Either automationId or controlName must be provided."
         }
 
@@ -173,7 +279,8 @@ function CloseApplicationByProcessId {
     try {
         Stop-Process -Id $processId -Force
         Write-Host "Application with Process ID $processId has been closed."
-    } catch {
+    }
+    catch {
         Write-Error "Failed to close application with Process ID $processId."
     }
 }

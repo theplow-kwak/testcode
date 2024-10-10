@@ -28,7 +28,8 @@ if ($null -ne $appWindow) {
     $resultText = GetResultText -windowElement $appWindow -automationId "CalculatorResults" -timeoutSeconds 30
     if ($null -ne $resultText) {
         Write-Host "Final result from the calculator: $resultText"
-    } else {
+    }
+    else {
         Write-Error "Failed to retrieve the result text."
     }
 
@@ -38,9 +39,19 @@ if ($null -ne $appWindow) {
         Write-Host "Popup detected and handled."
     }
 
+    # Get the native window handle
+    $windowHandle = Get-NativeWindowHandle -automationElement $appWindow
+
+    # Restore and bring the window to the front
+    Restore-WindowAndBringToFront -windowHandle $windowHandle
+    
+    # Capture screenshot of the window and save as 'window_capture.jpg'
+    Capture-WindowScreenshot -windowHandle $windowHandle -outputFilePath "C:\path\to\save\window_capture.jpg"
+      
     # Stop the Calculator process
     CloseApplicationByProcessId -processId $calcProcess.Id
 
-} else {
+}
+else {
     Write-Error "Could not find the application window."
 }
