@@ -32,7 +32,7 @@ if ($null -ne $appWindow) {
     Start-Sleep -Milliseconds 500
 
     # Get the result text from the display using AutomationId or ControlName
-    $resultText = GetResultText -windowElement $appWindow -automationId "CalculatorResults" -timeoutSeconds 30
+    $resultText = Get-ResultText -windowElement $appWindow -automationId "CalculatorResults" -timeoutSeconds 30
     if ($null -ne $resultText) {
         Write-Host "Final result from the calculator: $resultText"
     }
@@ -62,7 +62,7 @@ if ($null -ne $appWindow) {
     [WindowHelper]::MoveWindow($windowHandle, 100, 200)
     
     # Capture screenshot of the window and save as 'window_capture.jpg'
-    Capture-WindowScreenshot -windowHandle $windowHandle -outputFilePath ".\window_capture.jpg"
+    Get-WindowScreenshot -windowHandle $windowHandle -outputFilePath "\window_capture.jpg"
     Start-Sleep -Milliseconds 500
 
     # Stop the Calculator process

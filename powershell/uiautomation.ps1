@@ -62,24 +62,22 @@ Add-Type @"
 "@
 
 # Function to capture and save a screenshot of a window using its handle
-function Capture-WindowScreenshot {
+function Get-WindowScreenshot {
     param (
         [IntPtr]$windowHandle,
         [string]$outputFilePath
     )
 
-    # Write-Host "Screenshot saved to $outputFilePath as JPG"
     $rect = [WindowHelper+RECT]::new()
     $return = [WindowHelper]::GetWindowRect($windowHandle, [ref]$rect)
     $bounds = [Drawing.Rectangle]::FromLTRB($rect.Left, $rect.Top, $rect.Right, $rect.Bottom)
 
     $bmp = New-Object Drawing.Bitmap $bounds.width, $bounds.height
     $graphics = [Drawing.Graphics]::FromImage($bmp)
-    
+
     $graphics.CopyFromScreen($bounds.Location, [Drawing.Point]::Empty, $bounds.size)
-    
     $bmp.Save($outputFilePath)
-    
+
     $graphics.Dispose()
     $bmp.Dispose()
 }
@@ -152,53 +150,60 @@ function Get-ApplicationWindow {
 # Function to click a control using AutomationId or ControlName
 function ClickControl {
     param (
-        [System.Windows.Automation.AutomationElement]$windowElement,
-        [string]$automationId = $null,
-        [string]$controlName = $null
+        [Parameter(Mandatory = $true)][ValidateNotNull()]$windowElement,
+        [Parameter(Mandatory = $false)][string]$automationId,
+        [Parameter(Mandatory = $false)][string]$controlName
     )
 
-    Write-Host "Searching for control with AutomationId '$automationId' or ControlName '$controlName'..."
+    try {
+        $element = $null
 
-    if (-not [string]::IsNullOrEmpty($automationId)) {
-        $condition = [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty, $automationId)
-        $ButtonName = $automationId
-    }
-    elseif (-not [string]::IsNullOrEmpty($controlName)) {
-        $condition = [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, $controlName)
-        $ButtonName = $controlName
-    }
-    else {
-        throw "Either automationId or controlName must be provided."
-    }
+        if (-not [string]::IsNullOrEmpty($automationId)) {
+            $element = $windowElement.FindFirst([Windows.Automation.TreeScope]::Subtree, 
+                (New-Object Windows.Automation.PropertyCondition ([Windows.Automation.AutomationElement]::AutomationIdProperty, $automationId)))
+        }
+        elseif (-not [string]::IsNullOrEmpty($controlName)) {
+            $element = $windowElement.FindFirst([Windows.Automation.TreeScope]::Subtree, 
+                (New-Object Windows.Automation.PropertyCondition ([Windows.Automation.AutomationElement]::NameProperty, $controlName)))
+        }
 
-    $control = $windowElement.FindFirst([System.Windows.Automation.TreeScope]::Subtree, $condition)
+        if ($null -eq $element) {
+            throw "Control with AutomationId '$automationId' or Name '$controlName' not found."
+        }
 
-    if ($null -ne $control) {
-        $controlType = $control.GetCurrentPropertyValue([System.Windows.Automation.AutomationElement]::ControlTypeProperty)
+        $controlType = $element.GetCurrentPropertyValue([System.Windows.Automation.AutomationElement]::ControlTypeProperty)
 
         switch ($controlType) {
             { $_ -eq [System.Windows.Automation.ControlType]::Button } {
-                $invokePattern = $control.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
-                $invokePattern.Invoke()
-                Write-Host "Button '$ButtonName' clicked."
+                try {
+                    $invokePattern = $element.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
+                    $invokePattern.Invoke()
+                }
+                catch {
+                    Write-Error "Failed to invoke control. Error: $_"
+                }
             }
             { $_ -eq [System.Windows.Automation.ControlType]::RadioButton } {
-                $selectPattern = $control.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)
-                $selectPattern.Select()
-                Write-Host "RadioButton '$ButtonName' selected."
+                try {
+                    $selectPattern = $element.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)
+                    $selectPattern.Select()
+                }
+                catch {
+                    Write-Error "Failed to select control. Error: $_"
+                }
             }
             default {
-                Write-Error "Control '$ButtonName' is not a supported type (Button or RadioButton)."
+                Write-Error "Control '$automationId' or '$controlName' is not a supported type (Button or RadioButton)."
             }
         }
     }
-    else {
-        Write-Error "Control '$ButtonName' not found."
+    catch {
+        Write-Error "Error occurred while trying to click control: $_"
     }
 }
 
 # Function to get result text from a specific control using AutomationId or ControlName
-function GetResultText {
+function Get-ResultText {
     param (
         [System.Windows.Automation.AutomationElement]$windowElement,
         [string]$automationId = $null,
