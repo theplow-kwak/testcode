@@ -8,8 +8,6 @@ Add-Type @"
     using System;
     using System.Runtime.InteropServices;
     using System.Drawing;
-    // using System.Drawing.Imaging;
-    // using System.Windows.Forms;
 
     public class WindowHelper {
         [DllImport("user32.dll")]
@@ -39,25 +37,6 @@ Add-Type @"
             public int Bottom;
         }
 
-//        public static Bitmap CaptureWindow(IntPtr hWnd) {
-//            RECT rect = new RECT();
-//            GetWindowRect(hWnd, ref rect);
-//            int width = rect.Right - rect.Left;
-//            int height = rect.Bottom - rect.Top;
-
-//            Bitmap bitmap = new Bitmap(width, height, PixelFormat.Format32bppArgb);
-//            using (Graphics g = Graphics.FromImage(bitmap)) {
-//                IntPtr hdc = g.GetHdc();
-//                PrintWindow(hWnd, hdc, 0);
-//                g.ReleaseHdc(hdc);
-//            }
-//            return bitmap;
-//        }
-
-//        public static void SaveScreenshot(string filePath, Bitmap bitmap) {
-//            bitmap.Save(filePath, ImageFormat.Jpeg);  // Save as JPG
-//        }
-
         public static void RestoreAndBringToFront(IntPtr hWnd) {
             // Restore the window if it is minimized
             ShowWindow(hWnd, SW_RESTORE);
@@ -83,20 +62,27 @@ Add-Type @"
 "@
 
 # Function to capture and save a screenshot of a window using its handle
-# function Capture-WindowScreenshot {
-#     param (
-#         [IntPtr]$windowHandle,
-#         [string]$outputFilePath
-#     )
+function Capture-WindowScreenshot {
+    param (
+        [IntPtr]$windowHandle,
+        [string]$outputFilePath
+    )
 
-#     # Capture the window as a bitmap
-#     $bitmap = [WindowHelper]::CaptureWindow($windowHandle)
+    # Write-Host "Screenshot saved to $outputFilePath as JPG"
+    $rect = [WindowHelper+RECT]::new()
+    $return = [WindowHelper]::GetWindowRect($windowHandle, [ref]$rect)
+    $bounds = [Drawing.Rectangle]::FromLTRB($rect.Left, $rect.Top, $rect.Right, $rect.Bottom)
 
-#     # Save the screenshot to the specified file path in JPG format
-#     [WindowHelper]::SaveScreenshot($outputFilePath, $bitmap)
-
-#     Write-Host "Screenshot saved to $outputFilePath as JPG"
-# }
+    $bmp = New-Object Drawing.Bitmap $bounds.width, $bounds.height
+    $graphics = [Drawing.Graphics]::FromImage($bmp)
+    
+    $graphics.CopyFromScreen($bounds.Location, [Drawing.Point]::Empty, $bounds.size)
+    
+    $bmp.Save($outputFilePath)
+    
+    $graphics.Dispose()
+    $bmp.Dispose()
+}
 
 # Function to get the native window handle (HWND) from AutomationElement
 function Get-NativeWindowHandle {

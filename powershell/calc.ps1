@@ -59,9 +59,10 @@ if ($null -ne $appWindow) {
     
     Restore-WindowAndBringToFront -windowHandle $windowHandle
     Start-Sleep -Milliseconds 2000
+    [WindowHelper]::MoveWindow($windowHandle, 100, 200)
     
     # Capture screenshot of the window and save as 'window_capture.jpg'
-    # Capture-WindowScreenshot -windowHandle $windowHandle -outputFilePath "C:\window_capture.jpg"
+    Capture-WindowScreenshot -windowHandle $windowHandle -outputFilePath ".\window_capture.jpg"
     Start-Sleep -Milliseconds 500
 
     # Stop the Calculator process
