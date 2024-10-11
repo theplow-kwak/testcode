@@ -34,4 +34,4 @@ clip = clip.resize(0.2)
 print(f"after resize Width x Height of clip 1 : {clip.w} x {clip.h}")
 
 clip.audio.write_audiofile("combined.mp3", 22050, ffmpeg_params=["-ac", "1", '-metadata', 'creation_time=2021/02/16 14:00:33'])
-clip.write_videofile("combined.mp4")
+# clip.write_videofile("combined.mp4")
