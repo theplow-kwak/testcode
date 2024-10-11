@@ -50,17 +50,13 @@ public:
 Generator foo()
 {
     int i = 0;
-    while (true)
+    while (i < 5)
         co_await i++;
 }
 
 int main()
 {
     Generator task = foo();
-    std::cout << "\t main 1 - " << task.next() << std::endl;
-    std::cout << "\t main 2 - " << task.next() << std::endl;
-    std::cout << "\t main 3 - " << task.next() << std::endl;
-
-    std::cout << "\t main 4" << std::endl;
-    task.next();
+    for (int i = 0; i < 15; i++)
+        std::cout << "main " << i << " - " << task.next() << std::endl;
 }
