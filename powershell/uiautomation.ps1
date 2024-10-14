@@ -82,6 +82,28 @@ function Get-WindowScreenshot {
     $bmp.Dispose()
 }
 
+function Get-WindowFullScreenshot {
+    param (
+        [IntPtr]$windowHandle,
+        [string]$outputFilePath
+    )
+
+    # 화면의 크기 가져오기
+    $Screen = [System.Windows.Forms.SystemInformation]::VirtualScreen
+    $Width = $Screen.Width
+    $Height = $Screen.Height
+
+    # 화면에서 비트맵 생성
+    $Bitmap = New-Object System.Drawing.Bitmap $Width, $Height
+    $Graphics = [System.Drawing.Graphics]::FromImage($Bitmap)
+
+    # 비트맵에 화면 그리기
+    $Graphics.CopyFromScreen($Screen.Location, [System.Drawing.Point]::Empty, $Screen.Size)
+
+    # 비트맵을 JPG 파일로 저장
+    $Bitmap.Save($outputFilePath)
+}
+
 # Function to get the native window handle (HWND) from AutomationElement
 function Get-NativeWindowHandle {
     param (
@@ -152,10 +174,11 @@ function ClickControl {
     param (
         [Parameter(Mandatory = $true)][ValidateNotNull()]$windowElement,
         [Parameter(Mandatory = $false)][string]$automationId,
-        [Parameter(Mandatory = $false)][string]$controlName
+        [Parameter(Mandatory = $false)][string]$controlName,
+        [int]$timeoutSeconds = 30
     )
 
-    try {
+    return WaitWithTimeout -timeoutSeconds $timeoutSeconds -action {
         $element = $null
 
         if (-not [string]::IsNullOrEmpty($automationId)) {
@@ -181,6 +204,7 @@ function ClickControl {
                 }
                 catch {
                     Write-Error "Failed to invoke control. Error: $_"
+                    return $null
                 }
             }
             { $_ -eq [System.Windows.Automation.ControlType]::RadioButton } {
@@ -190,15 +214,15 @@ function ClickControl {
                 }
                 catch {
                     Write-Error "Failed to select control. Error: $_"
+                    return $null
                 }
             }
             default {
                 Write-Error "Control '$automationId' or '$controlName' is not a supported type (Button or RadioButton)."
+                return $null
             }
         }
-    }
-    catch {
-        Write-Error "Error occurred while trying to click control: $_"
+        return $true
     }
 }
 
