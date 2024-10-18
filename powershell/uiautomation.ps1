@@ -68,40 +68,23 @@ function Get-WindowScreenshot {
         [string]$outputFilePath
     )
 
-    $rect = [WindowHelper+RECT]::new()
-    $return = [WindowHelper]::GetWindowRect($windowHandle, [ref]$rect)
-    $bounds = [Drawing.Rectangle]::FromLTRB($rect.Left, $rect.Top, $rect.Right, $rect.Bottom)
+    # Get the size of the screen
+    if ($null -ne $windowHandle) {
+        $rect = [WindowHelper+RECT]::new()
+        $return = [WindowHelper]::GetWindowRect($windowHandle, [ref]$rect)
+        $Screen = [Drawing.Rectangle]::FromLTRB($rect.Left, $rect.Top, $rect.Right, $rect.Bottom)
+    }
+    else {
+        $Screen = [System.Windows.Forms.SystemInformation]::VirtualScreen       
+    }
 
-    $bmp = New-Object Drawing.Bitmap $bounds.width, $bounds.height
-    $graphics = [Drawing.Graphics]::FromImage($bmp)
+    # Create a bitmap from the screen
+    $Bitmap = New-Object Drawing.Bitmap $Screen.width, $Screen.height
+    $Graphics = [Drawing.Graphics]::FromImage($Bitmap)
 
-    $graphics.CopyFromScreen($bounds.Location, [Drawing.Point]::Empty, $bounds.size)
-    $bmp.Save($outputFilePath)
-
-    $graphics.Dispose()
-    $bmp.Dispose()
-}
-
-function Get-WindowFullScreenshot {
-    param (
-        [IntPtr]$windowHandle,
-        [string]$outputFilePath
-    )
-
-    # 화면의 크기 가져오기
-    $Screen = [System.Windows.Forms.SystemInformation]::VirtualScreen
-    $Width = $Screen.Width
-    $Height = $Screen.Height
-
-    # 화면에서 비트맵 생성
-    $Bitmap = New-Object System.Drawing.Bitmap $Width, $Height
-    $Graphics = [System.Drawing.Graphics]::FromImage($Bitmap)
-
-    # 비트맵에 화면 그리기
-    $Graphics.CopyFromScreen($Screen.Location, [System.Drawing.Point]::Empty, $Screen.Size)
-
-    # 비트맵을 JPG 파일로 저장
-    $Bitmap.Save($outputFilePath)
+    # Capture the screen image
+    $Graphics.CopyFromScreen($Screen.Location, [Drawing.Point]::Empty, $Screen.size)
+    $Bitmap.Save($outputFilePath, [System.Drawing.Imaging.ImageFormat]::Jpeg)
 }
 
 # Function to get the native window handle (HWND) from AutomationElement
@@ -159,9 +142,8 @@ function Get-ApplicationWindow {
         $rootElement = [System.Windows.Automation.AutomationElement]::RootElement
         $windows = $rootElement.FindAll([System.Windows.Automation.TreeScope]::Children, [System.Windows.Automation.Condition]::TrueCondition)
         foreach ($window in $windows) {
-            # $windowName = $window.GetCurrentPropertyValue([System.Windows.Automation.AutomationElement]::NameProperty)
-            if ($window.Current.Name -like "*$partialWindowTitle*") {
-                Write-Host "Window found: $windowName"
+            if ($window.Current.Name -like "$partialWindowTitle*") {
+                Write-Host "Window found: $partialWindowTitle"
                 return $window
             }
         }
@@ -198,24 +180,12 @@ function ClickControl {
 
         switch ($controlType) {
             { $_ -eq [System.Windows.Automation.ControlType]::Button } {
-                try {
-                    $invokePattern = $element.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
-                    $invokePattern.Invoke()
-                }
-                catch {
-                    Write-Error "Failed to invoke control. Error: $_"
-                    return $null
-                }
+                $invokePattern = $element.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
+                $invokePattern.Invoke()
             }
             { $_ -eq [System.Windows.Automation.ControlType]::RadioButton } {
-                try {
-                    $selectPattern = $element.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)
-                    $selectPattern.Select()
-                }
-                catch {
-                    Write-Error "Failed to select control. Error: $_"
-                    return $null
-                }
+                $selectPattern = $element.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)
+                $selectPattern.Select()
             }
             default {
                 Write-Error "Control '$automationId' or '$controlName' is not a supported type (Button or RadioButton)."
@@ -235,8 +205,6 @@ function Get-ResultText {
         [int]$timeoutSeconds = 30
     )
 
-    Write-Host "Searching for result text with AutomationId '$automationId' or ControlName '$controlName'..."
-
     return WaitWithTimeout -timeoutSeconds $timeoutSeconds -action {
         if (-not [string]::IsNullOrEmpty($automationId)) {
             $condition = [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty, $automationId)
@@ -249,10 +217,8 @@ function Get-ResultText {
         }
 
         $textControl = $windowElement.FindFirst([System.Windows.Automation.TreeScope]::Subtree, $condition)
-
         if ($null -ne $textControl) {
             $resultValue = $textControl.GetCurrentPropertyValue([System.Windows.Automation.AutomationElement]::NameProperty)
-            Write-Host "Result found: $resultValue"
             return $resultValue
         }
         return $null
@@ -267,17 +233,13 @@ function WaitForTextInWindow {
         [int]$timeoutSeconds = 30
     )
 
-    Write-Host "Waiting for text '$textToFind' to appear..."
-
     return WaitWithTimeout -timeoutSeconds $timeoutSeconds -action {
         $condition = [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Text)
         $textElements = $windowElement.FindAll([System.Windows.Automation.TreeScope]::Subtree, $condition)
 
         foreach ($element in $textElements) {
             $textValue = $element.GetCurrentPropertyValue([System.Windows.Automation.AutomationElement]::NameProperty)
-
             if ($textValue -like "*$textToFind*") {
-                Write-Host "Text '$textToFind' found!"
                 return $textValue
             }
         }
@@ -288,21 +250,21 @@ function WaitForTextInWindow {
 # Function to check for popup windows
 function CheckForPopup {
     param (
-        [string]$popupTitlePart,
-        [int]$timeoutSeconds = 10
+        [System.Windows.Automation.AutomationElement]$windowElement,
+        [string]$popupTitlePart
     )
 
-    return WaitWithTimeout -timeoutSeconds $timeoutSeconds -action {
-        $desktop = [System.Windows.Automation.AutomationElement]::RootElement
-        $condition = [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, $popupTitlePart, [System.Windows.Automation.PropertyConditionFlags]::IgnoreCase)
-        $popupWindow = $desktop.FindFirst([System.Windows.Automation.TreeScope]::Children, $condition)
-
-        if ($null -ne $popupWindow) {
-            Write-Host "Popup window with title containing '$popupTitlePart' found."
-            return $popupWindow
-        }
-        return $null
+    if ($null -eq $windowElement) {
+        $windowElement = [System.Windows.Automation.AutomationElement]::RootElement
     }
+    $condition = [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, $popupTitlePart, [System.Windows.Automation.PropertyConditionFlags]::IgnoreCase)
+    $popupWindow = $windowElement.FindAll([System.Windows.Automation.TreeScope]::Children, $condition) | Where-Object { $_.RootElement -eq $desktop }
+
+    if ($null -ne $popupWindow) {
+        Write-Host "Popup window with title containing '$popupTitlePart' found."
+        return $popupWindow
+    }
+    return $null
 }
 
 # Function to close an application by its process ID
