@@ -134,13 +134,19 @@ function WaitWithTimeout {
 # Function to get the main application window by partial title
 function Get-ApplicationWindow {
     param (
+        [Windows.Automation.AutomationElement]$rootElement,
         [string]$partialWindowTitle,
         [int]$timeoutSeconds = 30
     )
 
-    return WaitWithTimeout -timeoutSeconds $timeoutSeconds -action {
+    if ($null -eq $rootElement) {
         $rootElement = [Windows.Automation.AutomationElement]::RootElement
-        $windows = $rootElement.FindAll([Windows.Automation.TreeScope]::Children, [Windows.Automation.Condition]::TrueCondition)
+    }
+    $condition_w = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ControlTypeProperty, [Windows.Automation.ControlType]::Window)
+    $condition_d = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ControlTypeProperty, [Windows.Automation.ControlType]::Dialog)
+
+    return WaitWithTimeout -timeoutSeconds $timeoutSeconds -action {
+        $windows = $rootElement.FindAll([Windows.Automation.TreeScope]::Children, [Windows.Automation.OrCondition]::new($condition_w, $condition_d))
         foreach ($window in $windows) {
             if ($window.Current.Name -like "$partialWindowTitle*") {
                 Write-Host "Window found: $partialWindowTitle"
@@ -149,6 +155,30 @@ function Get-ApplicationWindow {
         }
         return $null
     }
+}
+
+# Function to check for popup windows
+function CheckForPopup {
+    param (
+        [Windows.Automation.AutomationElement]$rootElement,
+        [string]$partialWindowTitle
+    )
+
+    if ($null -eq $rootElement) {
+        $rootElement = [Windows.Automation.AutomationElement]::RootElement
+    }
+
+    $condition_n = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::NameProperty, $partialWindowTitle, [Windows.Automation.PropertyConditionFlags]::IgnoreCase)
+    $condition_w = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ControlTypeProperty, [Windows.Automation.ControlType]::Window)
+    $condition_d = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ControlTypeProperty, [Windows.Automation.ControlType]::Dialog)
+    $condition = [Windows.Automation.OrCondition]::new($condition_w, $condition_d)
+
+    $popupWindow = $rootElement.FindFirst([Windows.Automation.TreeScope]::Children, [Windows.Automation.AndCondition]::new($condition, $condition_n))
+    if ($null -ne $popupWindow) {
+        Write-Host "Popup window with title containing '$partialWindowTitle' found."
+        return $popupWindow
+    }
+    return $null
 }
 
 # Function to click a control using AutomationId or ControlName
@@ -160,38 +190,37 @@ function ClickControl {
         [int]$timeoutSeconds = 30
     )
 
+    if (-not [string]::IsNullOrEmpty($automationId)) {
+        $condition = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::AutomationIdProperty, $automationId)
+    }
+    elseif (-not [string]::IsNullOrEmpty($controlName)) {
+        $condition = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::NameProperty, $controlName)
+    }
+    else {
+        throw "Either automationId or controlName must be provided."
+    }
+
     return WaitWithTimeout -timeoutSeconds $timeoutSeconds -action {
-        if (-not [string]::IsNullOrEmpty($automationId)) {
-            $condition = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::AutomationIdProperty, $automationId)
-        }
-        elseif (-not [string]::IsNullOrEmpty($controlName)) {
-            $condition = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::NameProperty, $controlName)
-        }
-        else {
-            throw "Either automationId or controlName must be provided."
-        }
-
         $element = $windowElement.FindFirst([Windows.Automation.TreeScope]::Subtree, $condition)
-        if ($null -eq $element) {
-            throw "Control with AutomationId '$automationId' or Name '$controlName' not found."
+        if ($null -ne $element) {
+            $controlType = $element.GetCurrentPropertyValue([Windows.Automation.AutomationElement]::ControlTypeProperty)
+            switch ($controlType) {
+                { $_ -eq [Windows.Automation.ControlType]::Button } {
+                    $invokePattern = $element.GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern)
+                    $invokePattern.Invoke()
+                }
+                { $_ -eq [Windows.Automation.ControlType]::RadioButton } {
+                    $selectPattern = $element.GetCurrentPattern([Windows.Automation.SelectionItemPattern]::Pattern)
+                    $selectPattern.Select()
+                }
+                default {
+                    Write-Error "Control '$automationId' or '$controlName' is not a supported type (Button or RadioButton)."
+                    return $null
+                }
+            }
+            return $true
         }
-
-        $controlType = $element.GetCurrentPropertyValue([Windows.Automation.AutomationElement]::ControlTypeProperty)
-        switch ($controlType) {
-            { $_ -eq [Windows.Automation.ControlType]::Button } {
-                $invokePattern = $element.GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern)
-                $invokePattern.Invoke()
-            }
-            { $_ -eq [Windows.Automation.ControlType]::RadioButton } {
-                $selectPattern = $element.GetCurrentPattern([Windows.Automation.SelectionItemPattern]::Pattern)
-                $selectPattern.Select()
-            }
-            default {
-                Write-Error "Control '$automationId' or '$controlName' is not a supported type (Button or RadioButton)."
-                return $null
-            }
-        }
-        return $true
+        return $null
     }
 }
 
@@ -204,17 +233,17 @@ function Get-ResultText {
         [int]$timeoutSeconds = 30
     )
 
-    return WaitWithTimeout -timeoutSeconds $timeoutSeconds -action {
-        if (-not [string]::IsNullOrEmpty($automationId)) {
-            $condition = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::AutomationIdProperty, $automationId)
-        }
-        elseif (-not [string]::IsNullOrEmpty($controlName)) {
-            $condition = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::NameProperty, $controlName)
-        }
-        else {
-            throw "Either automationId or controlName must be provided."
-        }
+    if (-not [string]::IsNullOrEmpty($automationId)) {
+        $condition = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::AutomationIdProperty, $automationId)
+    }
+    elseif (-not [string]::IsNullOrEmpty($controlName)) {
+        $condition = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::NameProperty, $controlName)
+    }
+    else {
+        throw "Either automationId or controlName must be provided."
+    }
 
+    return WaitWithTimeout -timeoutSeconds $timeoutSeconds -action {
         $textControl = $windowElement.FindFirst([Windows.Automation.TreeScope]::Subtree, $condition)
         if ($null -ne $textControl) {
             $resultValue = $textControl.GetCurrentPropertyValue([Windows.Automation.AutomationElement]::NameProperty)
@@ -244,26 +273,6 @@ function WaitForTextInWindow {
         }
         return $null
     }
-}
-
-# Function to check for popup windows
-function CheckForPopup {
-    param (
-        [Windows.Automation.AutomationElement]$windowElement,
-        [string]$popupTitlePart
-    )
-
-    if ($null -eq $windowElement) {
-        $windowElement = [Windows.Automation.AutomationElement]::RootElement
-    }
-
-    $condition = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::NameProperty, $popupTitlePart, [Windows.Automation.PropertyConditionFlags]::IgnoreCase)
-    $popupWindow = $windowElement.FindAll([Windows.Automation.TreeScope]::Children, $condition) | Where-Object { $_.RootElement -eq $windowElement }
-    if ($null -ne $popupWindow) {
-        Write-Host "Popup window with title containing '$popupTitlePart' found."
-        return $popupWindow
-    }
-    return $null
 }
 
 # Function to close an application by its process ID
