@@ -75,7 +75,7 @@ function Get-WindowScreenshot {
         $Screen = [Drawing.Rectangle]::FromLTRB($rect.Left, $rect.Top, $rect.Right, $rect.Bottom)
     }
     else {
-        $Screen = [System.Windows.Forms.SystemInformation]::VirtualScreen       
+        $Screen = [Windows.Forms.SystemInformation]::VirtualScreen       
     }
 
     # Create a bitmap from the screen
@@ -90,7 +90,7 @@ function Get-WindowScreenshot {
 # Function to get the native window handle (HWND) from AutomationElement
 function Get-NativeWindowHandle {
     param (
-        [System.Windows.Automation.AutomationElement]$automationElement
+        [Windows.Automation.AutomationElement]$automationElement
     )
 
     $handle = $automationElement.Current.NativeWindowHandle
@@ -139,8 +139,8 @@ function Get-ApplicationWindow {
     )
 
     return WaitWithTimeout -timeoutSeconds $timeoutSeconds -action {
-        $rootElement = [System.Windows.Automation.AutomationElement]::RootElement
-        $windows = $rootElement.FindAll([System.Windows.Automation.TreeScope]::Children, [System.Windows.Automation.Condition]::TrueCondition)
+        $rootElement = [Windows.Automation.AutomationElement]::RootElement
+        $windows = $rootElement.FindAll([Windows.Automation.TreeScope]::Children, [Windows.Automation.Condition]::TrueCondition)
         foreach ($window in $windows) {
             if ($window.Current.Name -like "$partialWindowTitle*") {
                 Write-Host "Window found: $partialWindowTitle"
@@ -176,15 +176,15 @@ function ClickControl {
             throw "Control with AutomationId '$automationId' or Name '$controlName' not found."
         }
 
-        $controlType = $element.GetCurrentPropertyValue([System.Windows.Automation.AutomationElement]::ControlTypeProperty)
+        $controlType = $element.GetCurrentPropertyValue([Windows.Automation.AutomationElement]::ControlTypeProperty)
 
         switch ($controlType) {
-            { $_ -eq [System.Windows.Automation.ControlType]::Button } {
-                $invokePattern = $element.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
+            { $_ -eq [Windows.Automation.ControlType]::Button } {
+                $invokePattern = $element.GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern)
                 $invokePattern.Invoke()
             }
-            { $_ -eq [System.Windows.Automation.ControlType]::RadioButton } {
-                $selectPattern = $element.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)
+            { $_ -eq [Windows.Automation.ControlType]::RadioButton } {
+                $selectPattern = $element.GetCurrentPattern([Windows.Automation.SelectionItemPattern]::Pattern)
                 $selectPattern.Select()
             }
             default {
@@ -199,7 +199,7 @@ function ClickControl {
 # Function to get result text from a specific control using AutomationId or ControlName
 function Get-ResultText {
     param (
-        [System.Windows.Automation.AutomationElement]$windowElement,
+        [Windows.Automation.AutomationElement]$windowElement,
         [string]$automationId = $null,
         [string]$controlName = $null,
         [int]$timeoutSeconds = 30
@@ -207,18 +207,18 @@ function Get-ResultText {
 
     return WaitWithTimeout -timeoutSeconds $timeoutSeconds -action {
         if (-not [string]::IsNullOrEmpty($automationId)) {
-            $condition = [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty, $automationId)
+            $condition = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::AutomationIdProperty, $automationId)
         }
         elseif (-not [string]::IsNullOrEmpty($controlName)) {
-            $condition = [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, $controlName)
+            $condition = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::NameProperty, $controlName)
         }
         else {
             throw "Either automationId or controlName must be provided."
         }
 
-        $textControl = $windowElement.FindFirst([System.Windows.Automation.TreeScope]::Subtree, $condition)
+        $textControl = $windowElement.FindFirst([Windows.Automation.TreeScope]::Subtree, $condition)
         if ($null -ne $textControl) {
-            $resultValue = $textControl.GetCurrentPropertyValue([System.Windows.Automation.AutomationElement]::NameProperty)
+            $resultValue = $textControl.GetCurrentPropertyValue([Windows.Automation.AutomationElement]::NameProperty)
             return $resultValue
         }
         return $null
@@ -228,17 +228,17 @@ function Get-ResultText {
 # Wait for a specific text to appear in the window (with timeout)
 function WaitForTextInWindow {
     param (
-        [System.Windows.Automation.AutomationElement]$windowElement,
+        [Windows.Automation.AutomationElement]$windowElement,
         [string]$textToFind,
         [int]$timeoutSeconds = 30
     )
 
     return WaitWithTimeout -timeoutSeconds $timeoutSeconds -action {
-        $condition = [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Text)
-        $textElements = $windowElement.FindAll([System.Windows.Automation.TreeScope]::Subtree, $condition)
+        $condition = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ControlTypeProperty, [Windows.Automation.ControlType]::Text)
+        $textElements = $windowElement.FindAll([Windows.Automation.TreeScope]::Subtree, $condition)
 
         foreach ($element in $textElements) {
-            $textValue = $element.GetCurrentPropertyValue([System.Windows.Automation.AutomationElement]::NameProperty)
+            $textValue = $element.GetCurrentPropertyValue([Windows.Automation.AutomationElement]::NameProperty)
             if ($textValue -like "*$textToFind*") {
                 return $textValue
             }
@@ -250,15 +250,15 @@ function WaitForTextInWindow {
 # Function to check for popup windows
 function CheckForPopup {
     param (
-        [System.Windows.Automation.AutomationElement]$windowElement,
+        [Windows.Automation.AutomationElement]$windowElement,
         [string]$popupTitlePart
     )
 
     if ($null -eq $windowElement) {
-        $windowElement = [System.Windows.Automation.AutomationElement]::RootElement
+        $windowElement = [Windows.Automation.AutomationElement]::RootElement
     }
-    $condition = [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, $popupTitlePart, [System.Windows.Automation.PropertyConditionFlags]::IgnoreCase)
-    $popupWindow = $windowElement.FindAll([System.Windows.Automation.TreeScope]::Children, $condition) | Where-Object { $_.RootElement -eq $desktop }
+    $condition = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::NameProperty, $popupTitlePart, [Windows.Automation.PropertyConditionFlags]::IgnoreCase)
+    $popupWindow = $windowElement.FindAll([Windows.Automation.TreeScope]::Children, $condition) | Where-Object { $_.RootElement -eq $windowElement }
 
     if ($null -ne $popupWindow) {
         Write-Host "Popup window with title containing '$popupTitlePart' found."
