@@ -11,8 +11,10 @@ function Get-ApplicationWindow {
     )
 
     $rootElement = [Windows.Automation.AutomationElement]::RootElement
-    $condition = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ControlTypeProperty, [Windows.Automation.ControlType]::Window)
-    $windows = $rootElement.FindAll([Windows.Automation.TreeScope]::Descendants, $condition)
+    $condition_w = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ControlTypeProperty, [Windows.Automation.ControlType]::Window)
+    $condition_d = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ControlTypeProperty, [Windows.Automation.ControlType]::Dialog)
+    $condition_p = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ControlTypeProperty, [Windows.Automation.ControlType]::Pane)
+    $windows = $rootElement.FindAll([Windows.Automation.TreeScope]::Descendants, [Windows.Automation.OrCondition]::new($condition_w, $condition_d))
     foreach ($window in $windows) {
         $controlType = $window.GetCurrentPropertyValue([Windows.Automation.AutomationElement]::ControlTypeProperty)
         if ($controlType -eq [Windows.Automation.ControlType]::Window -or $controlType -eq [Windows.Automation.ControlType]::Dialog -or $controlType -eq [Windows.Automation.ControlType]::Pane) {

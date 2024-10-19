@@ -71,7 +71,7 @@ function Get-WindowScreenshot {
     # Get the size of the screen
     if ($null -ne $windowHandle) {
         $rect = [WindowHelper+RECT]::new()
-        $return = [WindowHelper]::GetWindowRect($windowHandle, [ref]$rect)
+        $temp = [WindowHelper]::GetWindowRect($windowHandle, [ref]$rect)
         $Screen = [Drawing.Rectangle]::FromLTRB($rect.Left, $rect.Top, $rect.Right, $rect.Bottom)
     }
     else {
@@ -79,12 +79,12 @@ function Get-WindowScreenshot {
     }
 
     # Create a bitmap from the screen
-    $Bitmap = New-Object Drawing.Bitmap $Screen.width, $Screen.height
+    $Bitmap = [Drawing.Bitmap]::New($Screen.width, $Screen.height)
     $Graphics = [Drawing.Graphics]::FromImage($Bitmap)
 
     # Capture the screen image
     $Graphics.CopyFromScreen($Screen.Location, [Drawing.Point]::Empty, $Screen.size)
-    $Bitmap.Save($outputFilePath, [System.Drawing.Imaging.ImageFormat]::Jpeg)
+    $Bitmap.Save($outputFilePath, [Drawing.Imaging.ImageFormat]::Jpeg)
 }
 
 # Function to get the native window handle (HWND) from AutomationElement
@@ -154,30 +154,29 @@ function Get-ApplicationWindow {
 # Function to click a control using AutomationId or ControlName
 function ClickControl {
     param (
-        [Parameter(Mandatory = $true)][ValidateNotNull()]$windowElement,
-        [Parameter(Mandatory = $false)][string]$automationId,
-        [Parameter(Mandatory = $false)][string]$controlName,
+        [Windows.Automation.AutomationElement]$windowElement,
+        [string]$automationId = $null,
+        [string]$controlName = $null,
         [int]$timeoutSeconds = 30
     )
 
     return WaitWithTimeout -timeoutSeconds $timeoutSeconds -action {
-        $element = $null
-
         if (-not [string]::IsNullOrEmpty($automationId)) {
-            $element = $windowElement.FindFirst([Windows.Automation.TreeScope]::Subtree, 
-                (New-Object Windows.Automation.PropertyCondition ([Windows.Automation.AutomationElement]::AutomationIdProperty, $automationId)))
+            $condition = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::AutomationIdProperty, $automationId)
         }
         elseif (-not [string]::IsNullOrEmpty($controlName)) {
-            $element = $windowElement.FindFirst([Windows.Automation.TreeScope]::Subtree, 
-                (New-Object Windows.Automation.PropertyCondition ([Windows.Automation.AutomationElement]::NameProperty, $controlName)))
+            $condition = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::NameProperty, $controlName)
+        }
+        else {
+            throw "Either automationId or controlName must be provided."
         }
 
+        $element = $windowElement.FindFirst([Windows.Automation.TreeScope]::Subtree, $condition)
         if ($null -eq $element) {
             throw "Control with AutomationId '$automationId' or Name '$controlName' not found."
         }
 
         $controlType = $element.GetCurrentPropertyValue([Windows.Automation.AutomationElement]::ControlTypeProperty)
-
         switch ($controlType) {
             { $_ -eq [Windows.Automation.ControlType]::Button } {
                 $invokePattern = $element.GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern)
@@ -257,9 +256,9 @@ function CheckForPopup {
     if ($null -eq $windowElement) {
         $windowElement = [Windows.Automation.AutomationElement]::RootElement
     }
+
     $condition = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::NameProperty, $popupTitlePart, [Windows.Automation.PropertyConditionFlags]::IgnoreCase)
     $popupWindow = $windowElement.FindAll([Windows.Automation.TreeScope]::Children, $condition) | Where-Object { $_.RootElement -eq $windowElement }
-
     if ($null -ne $popupWindow) {
         Write-Host "Popup window with title containing '$popupTitlePart' found."
         return $popupWindow
