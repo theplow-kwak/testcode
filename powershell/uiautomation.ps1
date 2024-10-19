@@ -120,13 +120,13 @@ function WaitWithTimeout {
     )
 
     $startTime = [DateTime]::Now
-    while (([DateTime]::Now - $startTime).TotalSeconds -lt $timeoutSeconds) {
+    do {
         $result = & $action
         if ($null -ne $result) {
             return $result
         }
         Start-Sleep -Milliseconds 500
-    }
+    } while (([DateTime]::Now - $startTime).TotalSeconds -lt $timeoutSeconds)
     Write-Error "Timeout of $timeoutSeconds seconds exceeded while waiting for condition."
     return $null
 }
@@ -149,7 +149,7 @@ function Get-ApplicationWindow {
         $windows = $rootElement.FindAll([Windows.Automation.TreeScope]::Children, [Windows.Automation.OrCondition]::new($condition_w, $condition_d))
         foreach ($window in $windows) {
             if ($window.Current.Name -like "$partialWindowTitle*") {
-                Write-Host "Window found: $partialWindowTitle"
+                Write-Host "Window found: $($window.Current.Name)"
                 return $window
             }
         }
@@ -175,7 +175,7 @@ function CheckForPopup {
 
     $popupWindow = $rootElement.FindFirst([Windows.Automation.TreeScope]::Children, [Windows.Automation.AndCondition]::new($condition, $condition_n))
     if ($null -ne $popupWindow) {
-        Write-Host "Popup window with title containing '$partialWindowTitle' found."
+        Write-Host "Popup window with title containing '$($popupWindow.Current.Name)' found."
         return $popupWindow
     }
     return $null
