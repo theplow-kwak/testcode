@@ -182,6 +182,38 @@ function CheckForPopup {
 }
 
 # Function to click a control using AutomationId or ControlName
+function Get-ControlElement {
+    param (
+        [Windows.Automation.AutomationElement]$windowElement,
+        [string]$automationId = $null,
+        [string]$controlName = $null,
+        [int]$timeoutSeconds = 30
+    )
+
+    if (-not [string]::IsNullOrEmpty($automationId)) {
+        $condition = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::AutomationIdProperty, $automationId)
+    }
+    elseif (-not [string]::IsNullOrEmpty($controlName)) {
+        $condition = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::NameProperty, $controlName)
+    }
+    else {
+        throw "Either automationId or controlName must be provided."
+    }
+    $type_text = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ControlTypeProperty, [Windows.Automation.ControlType]::Text)
+    $type_button = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ControlTypeProperty, [Windows.Automation.ControlType]::Button)
+    $type_radio = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ControlTypeProperty, [Windows.Automation.ControlType]::RadioButton)
+    $condition_type = [Windows.Automation.OrCondition]::new($type_text, $type_button, $type_radio)
+
+    return WaitWithTimeout -timeoutSeconds $timeoutSeconds -action {
+        $element = $windowElement.FindFirst([Windows.Automation.TreeScope]::Subtree, [Windows.Automation.AndCondition]::new($condition, $condition_type))
+        if ($null -ne $element) {
+            return $element
+        }
+        return $null
+    }
+}
+
+# Function to click a control using AutomationId or ControlName
 function ClickControl {
     param (
         [Windows.Automation.AutomationElement]$windowElement,
@@ -199,9 +231,12 @@ function ClickControl {
     else {
         throw "Either automationId or controlName must be provided."
     }
+    $condition_b = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ControlTypeProperty, [Windows.Automation.ControlType]::Button)
+    $condition_r = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ControlTypeProperty, [Windows.Automation.ControlType]::RadioButton)
+    $condition_o = [Windows.Automation.OrCondition]::new($condition_b, $condition_r)
 
     return WaitWithTimeout -timeoutSeconds $timeoutSeconds -action {
-        $element = $windowElement.FindFirst([Windows.Automation.TreeScope]::Subtree, $condition)
+        $element = $windowElement.FindFirst([Windows.Automation.TreeScope]::Subtree, [Windows.Automation.AndCondition]::new($condition, $condition_o))
         if ($null -ne $element) {
             $controlType = $element.GetCurrentPropertyValue([Windows.Automation.AutomationElement]::ControlTypeProperty)
             switch ($controlType) {
@@ -257,7 +292,7 @@ function Get-ResultText {
 function WaitForTextInWindow {
     param (
         [Windows.Automation.AutomationElement]$windowElement,
-        [string]$textToFind,
+        [string[]]$textToFind,
         [int]$timeoutSeconds = 30
     )
 
@@ -267,7 +302,7 @@ function WaitForTextInWindow {
 
         foreach ($element in $textElements) {
             $textValue = $element.GetCurrentPropertyValue([Windows.Automation.AutomationElement]::NameProperty)
-            if ($textValue -like "*$textToFind*") {
+            if ($textToFind | Where-Object { $textValue -like "*$_*" }) {
                 return $textValue
             }
         }
