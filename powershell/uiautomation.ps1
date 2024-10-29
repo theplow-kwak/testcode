@@ -127,7 +127,7 @@ function WaitWithTimeout {
         }
         Start-Sleep -Milliseconds 500
     } while (([DateTime]::Now - $startTime).TotalSeconds -lt $timeoutSeconds)
-    Write-Error "Timeout of $timeoutSeconds seconds exceeded while waiting for condition."
+    # Write-Error "Timeout of $timeoutSeconds seconds exceeded while waiting for condition."
     return $null
 }
 
@@ -283,6 +283,46 @@ function Get-ResultText {
         if ($null -ne $textControl) {
             $resultValue = $textControl.GetCurrentPropertyValue([Windows.Automation.AutomationElement]::NameProperty)
             return $resultValue
+        }
+        return $null
+    }
+}
+
+function Set-EditText {
+    param (
+        [Windows.Automation.AutomationElement]$windowElement,
+        [string]$automationId = $null,
+        [string]$controlName = $null,
+        [string]$textToInput = $null,
+        [int]$timeoutSeconds = 30
+    )
+
+    if (-not [string]::IsNullOrEmpty($automationId)) {
+        $condition = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::AutomationIdProperty, $automationId)
+    }
+    elseif (-not [string]::IsNullOrEmpty($controlName)) {
+        $condition = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::NameProperty, $controlName)
+    }
+    else {
+        throw "Either automationId or controlName must be provided."
+    }
+
+    if ([string]::IsNullOrEmpty($textToInput)) {
+        throw "textToInput cannot be null or empty."
+    }
+
+    return WaitWithTimeout -timeoutSeconds $timeoutSeconds -action {
+        $textControl = $windowElement.FindFirst([Windows.Automation.TreeScope]::Subtree, $condition)
+        if ($null -ne $textControl) {
+            $valuePattern = $textControl.GetCurrentPattern([Windows.Automation.ValuePattern]::Pattern)
+            if ($null -ne $valuePattern) {
+                $valuePattern.SetValue($textToInput)
+                return $true
+            }
+            else {
+                Write-Warning "The element does not support ValuePattern, possibly not a text input field."
+                return $null
+            }
         }
         return $null
     }
