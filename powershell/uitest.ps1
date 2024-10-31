@@ -37,19 +37,30 @@ function SearchControl {
     return
 }
 
-$window = Get-ApplicationWindow -partialWindowTitle $Title -timeoutSeconds 1
-if ($null -ne $window) {
-    $licensewindow = Get-ApplicationWindow -rootElement $window -partialWindowTitle "BurnInTest by PassMark Software" -timeoutSeconds 0
-    if ($null -ne $licensewindow) {
-        $license = Get-Content .\sn.txt
+$window = Get-ApplicationWindow -WindowClassName "Shell_TrayWnd"
+SearchControl -windowElement $window
+ClickControl -windowElement $window -controlName "Show Hidden Icons"
+$window = Get-ApplicationWindow -partialWindowTitle "System tray overflow window." -timeoutSeconds 0
+SearchControl -windowElement $window
 
-        $type_document = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ControlTypeProperty, [Windows.Automation.ControlType]::Document)
-        $documentElement = $licensewindow.FindFirst([Windows.Automation.TreeScope]::Descendants, $type_document) 
-        $documentElement.SetFocus()
-        [System.Windows.Forms.SendKeys]::SendWait($license)
-        ClickControl -windowElement $licensewindow -controlName "Continue"
-
-        $thanksewindow = Get-ApplicationWindow -rootElement $licensewindow -partialWindowTitle "Thanks" -timeoutSeconds 0
-        ClickControl -windowElement $thanksewindow -controlName "OK"
-    }
+$icons = $window.FindAll([System.Windows.Automation.TreeScope]::Children, (New-Object System.Windows.Automation.PropertyCondition ([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [Windows.Automation.ControlType]::Button)))    # 툴바에서 아이콘 찾기
+foreach ($icon in $icons) {
+    $name = $icon.Current.Name
+    Write-Output "Icon: $name"
 }
+
+# if ($null -ne $window) {
+#     $licensewindow = Get-ApplicationWindow -rootElement $window -partialWindowTitle "BurnInTest by PassMark Software" -timeoutSeconds 0
+#     if ($null -ne $licensewindow) {
+#         $license = Get-Content .\sn.txt
+
+#         $type_document = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ControlTypeProperty, [Windows.Automation.ControlType]::Document)
+#         $documentElement = $licensewindow.FindFirst([Windows.Automation.TreeScope]::Descendants, $type_document) 
+#         $documentElement.SetFocus()
+#         [System.Windows.Forms.SendKeys]::SendWait($license)
+#         ClickControl -windowElement $licensewindow -controlName "Continue"
+
+#         $thanksewindow = Get-ApplicationWindow -rootElement $licensewindow -partialWindowTitle "Thanks" -timeoutSeconds 0
+#         ClickControl -windowElement $thanksewindow -controlName "OK"
+#     }
+# }

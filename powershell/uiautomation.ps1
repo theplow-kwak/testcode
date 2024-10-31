@@ -61,6 +61,14 @@ Add-Type @"
     }
 "@
 
+$type_text = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ControlTypeProperty, [Windows.Automation.ControlType]::Text)
+$type_button = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ControlTypeProperty, [Windows.Automation.ControlType]::Button)
+$type_radio = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ControlTypeProperty, [Windows.Automation.ControlType]::RadioButton)
+
+$type_window = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ControlTypeProperty, [Windows.Automation.ControlType]::Window)
+$type_dialog = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ControlTypeProperty, [Windows.Automation.ControlType]::Dialog)
+$type_pane = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ControlTypeProperty, [Windows.Automation.ControlType]::Pane)
+
 # Function to capture and save a screenshot of a window using its handle
 function Get-WindowScreenshot {
     param (
@@ -136,19 +144,19 @@ function Get-ApplicationWindow {
     param (
         [Windows.Automation.AutomationElement]$rootElement,
         [string]$partialWindowTitle,
+        [string]$WindowClassName,
         [int]$timeoutSeconds = 30
     )
 
     if ($null -eq $rootElement) {
         $rootElement = [Windows.Automation.AutomationElement]::RootElement
     }
-    $condition_w = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ControlTypeProperty, [Windows.Automation.ControlType]::Window)
-    $condition_d = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ControlTypeProperty, [Windows.Automation.ControlType]::Dialog)
 
     return WaitWithTimeout -timeoutSeconds $timeoutSeconds -action {
-        $windows = $rootElement.FindAll([Windows.Automation.TreeScope]::Children, [Windows.Automation.OrCondition]::new($condition_w, $condition_d))
+        $windows = $rootElement.FindAll([Windows.Automation.TreeScope]::Children, [Windows.Automation.OrCondition]::new($type_window, $type_dialog, $type_pane))
         foreach ($window in $windows) {
-            if ($window.Current.Name -like "$partialWindowTitle*") {
+            Write-Host "Window -- $($window.Current.Name)"
+            if (($window.Current.Name -like "$partialWindowTitle*") -or ($window.Current.ClassName -like "$WindowClassName")) {
                 Write-Host "Window found: $($window.Current.Name)"
                 return $window
             }
@@ -168,12 +176,10 @@ function CheckForPopup {
         $rootElement = [Windows.Automation.AutomationElement]::RootElement
     }
 
-    $condition_n = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::NameProperty, $partialWindowTitle, [Windows.Automation.PropertyConditionFlags]::IgnoreCase)
-    $condition_w = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ControlTypeProperty, [Windows.Automation.ControlType]::Window)
-    $condition_d = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ControlTypeProperty, [Windows.Automation.ControlType]::Dialog)
-    $condition = [Windows.Automation.OrCondition]::new($condition_w, $condition_d)
+    $condition_name = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::NameProperty, $partialWindowTitle, [Windows.Automation.PropertyConditionFlags]::IgnoreCase)
+    $condition_window = [Windows.Automation.OrCondition]::new($type_window, $type_dialog)
 
-    $popupWindow = $rootElement.FindFirst([Windows.Automation.TreeScope]::Children, [Windows.Automation.AndCondition]::new($condition, $condition_n))
+    $popupWindow = $rootElement.FindFirst([Windows.Automation.TreeScope]::Children, [Windows.Automation.AndCondition]::new($condition_window, $condition_name))
     if ($null -ne $popupWindow) {
         Write-Host "Popup window with title containing '$($popupWindow.Current.Name)' found."
         return $popupWindow
@@ -199,9 +205,6 @@ function Get-ControlElement {
     else {
         throw "Either automationId or controlName must be provided."
     }
-    $type_text = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ControlTypeProperty, [Windows.Automation.ControlType]::Text)
-    $type_button = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ControlTypeProperty, [Windows.Automation.ControlType]::Button)
-    $type_radio = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ControlTypeProperty, [Windows.Automation.ControlType]::RadioButton)
     $condition_type = [Windows.Automation.OrCondition]::new($type_text, $type_button, $type_radio)
 
     return WaitWithTimeout -timeoutSeconds $timeoutSeconds -action {
@@ -231,12 +234,10 @@ function ClickControl {
     else {
         throw "Either automationId or controlName must be provided."
     }
-    $condition_b = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ControlTypeProperty, [Windows.Automation.ControlType]::Button)
-    $condition_r = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ControlTypeProperty, [Windows.Automation.ControlType]::RadioButton)
-    $condition_o = [Windows.Automation.OrCondition]::new($condition_b, $condition_r)
+    $condition_type = [Windows.Automation.OrCondition]::new($type_button, $type_radio)
 
     return WaitWithTimeout -timeoutSeconds $timeoutSeconds -action {
-        $element = $windowElement.FindFirst([Windows.Automation.TreeScope]::Subtree, [Windows.Automation.AndCondition]::new($condition, $condition_o))
+        $element = $windowElement.FindFirst([Windows.Automation.TreeScope]::Subtree, [Windows.Automation.AndCondition]::new($condition, $condition_type))
         if ($null -ne $element) {
             $controlType = $element.GetCurrentPropertyValue([Windows.Automation.AutomationElement]::ControlTypeProperty)
             switch ($controlType) {
@@ -337,8 +338,7 @@ function WaitForTextInWindow {
     )
 
     return WaitWithTimeout -timeoutSeconds $timeoutSeconds -action {
-        $condition = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ControlTypeProperty, [Windows.Automation.ControlType]::Text)
-        $textElements = $windowElement.FindAll([Windows.Automation.TreeScope]::Subtree, $condition)
+        $textElements = $windowElement.FindAll([Windows.Automation.TreeScope]::Subtree, $type_text)
 
         foreach ($element in $textElements) {
             $textValue = $element.GetCurrentPropertyValue([Windows.Automation.AutomationElement]::NameProperty)
