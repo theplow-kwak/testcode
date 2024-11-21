@@ -155,7 +155,7 @@ function Get-ApplicationWindow {
     return WaitWithTimeout -timeoutSeconds $timeoutSeconds -action {
         $windows = $rootElement.FindAll([Windows.Automation.TreeScope]::Children, [Windows.Automation.OrCondition]::new($type_window, $type_dialog, $type_pane))
         foreach ($window in $windows) {
-            Write-Host "Window -- $($window.Current.Name)"
+            Write-Verbose "Window -- $($window.Current.Name)"
             if (($window.Current.Name -like "$partialWindowTitle*") -or ($window.Current.ClassName -like "$WindowClassName")) {
                 Write-Host "Window found: $($window.Current.Name)"
                 return $window
@@ -339,7 +339,6 @@ function WaitForTextInWindow {
 
     return WaitWithTimeout -timeoutSeconds $timeoutSeconds -action {
         $textElements = $windowElement.FindAll([Windows.Automation.TreeScope]::Subtree, $type_text)
-
         foreach ($element in $textElements) {
             $textValue = $element.GetCurrentPropertyValue([Windows.Automation.AutomationElement]::NameProperty)
             if ($textToFind | Where-Object { $textValue -like "*$_*" }) {
