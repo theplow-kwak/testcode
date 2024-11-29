@@ -64,6 +64,8 @@ Add-Type @"
 $type_text = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ControlTypeProperty, [Windows.Automation.ControlType]::Text)
 $type_button = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ControlTypeProperty, [Windows.Automation.ControlType]::Button)
 $type_radio = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ControlTypeProperty, [Windows.Automation.ControlType]::RadioButton)
+$type_menubar = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ControlTypeProperty, [Windows.Automation.ControlType]::MenuBar)
+$type_menuitem = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ControlTypeProperty, [Windows.Automation.ControlType]::MenuItem)
 
 $type_window = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ControlTypeProperty, [Windows.Automation.ControlType]::Window)
 $type_dialog = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ControlTypeProperty, [Windows.Automation.ControlType]::Dialog)
@@ -205,7 +207,7 @@ function Get-ControlElement {
     else {
         throw "Either automationId or controlName must be provided."
     }
-    $condition_type = [Windows.Automation.OrCondition]::new($type_text, $type_button, $type_radio)
+    $condition_type = [Windows.Automation.OrCondition]::new($type_text, $type_button, $type_radio, $type_menubar)
 
     return WaitWithTimeout -timeoutSeconds $timeoutSeconds -action {
         $element = $windowElement.FindFirst([Windows.Automation.TreeScope]::Subtree, [Windows.Automation.AndCondition]::new($condition, $condition_type))
@@ -363,3 +365,48 @@ function CloseApplicationByProcessId {
         Write-Error "Failed to close application with Process ID $processId."
     }
 }
+
+function SelectMenuItem {
+    param (
+        [Windows.Automation.AutomationElement]$windowElement,
+        [string]$automationId = $null,
+        [string[]]$menuPath,
+        [int]$timeoutInSeconds = 10
+    )
+
+    $condition = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::AutomationIdProperty, $automationId)
+    $menuBar = $windowElement.FindFirst([Windows.Automation.TreeScope]::Subtree, [Windows.Automation.AndCondition]::new($condition, $type_menubar))
+    $currentElement = $menuBar
+
+    foreach ($menuItemName in $menuPath) {
+        # Find the next menu item in the path
+        $menuItem = $currentElement.FindFirst(
+            [Windows.Automation.TreeScope]::Subtree, # [Windows.Automation.Condition]::TrueCondition
+            [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::NameProperty, $menuItemName)
+        )
+
+        if ($null -eq $menuItem) {
+            Write-Output "Menu item '$menuItemName' not found."
+            Continue;
+        }
+
+        $expandCollapsePattern = 0
+        # Expand if it's a menu (ExpandCollapsePattern)
+        if ($menuItem.TryGetCurrentPattern([Windows.Automation.ExpandCollapsePattern]::Pattern, [ref]$expandCollapsePattern)) {
+            $expandCollapsePattern.Expand()
+            Start-Sleep -Milliseconds 500 # Short delay for UI updates
+        }
+
+        $invokePattern = 0
+        # Invoke if it's a clickable item (InvokePattern)
+        if ($menuItem.TryGetCurrentPattern([Windows.Automation.InvokePattern]::Pattern, [ref]$invokePattern)) {
+            $invokePattern.Invoke()
+        }
+
+        # Move to the next menu level
+        $currentElement = $menuItem
+    }
+
+    Write-Output "Menu path '$($menuPath -join " -> ")' selected successfully."
+}
+
