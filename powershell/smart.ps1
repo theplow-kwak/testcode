@@ -76,15 +76,17 @@ function Compare-SmartData {
 
     $data | Where-Object { $_.customer -eq $Customer -or $_.customer -eq "NVME" -or $_.customer -eq "NVME_$Customer" } | ForEach-Object {
         $byteOffset = $_.byte_offset
-        $criteria = $_.PSObject.Properties[$ProductKey].Value  # Dynamically access the product key
-        Write-Output "$($_.customer), Offset: $byteOffset, condition: $criteria"
+        $condition = $_.PSObject.Properties[$ProductKey].Value  # Dynamically access the product key
+        Write-Output "$($_.customer), Offset: $byteOffset, condition: $condition"
 
         if ($SmartBefore.ContainsKey($byteOffset) -and $SmartAfter.ContainsKey($byteOffset)) {
             $valueBefore = $SmartBefore[$byteOffset]
             $valueAfter = $SmartAfter[$byteOffset]
 
-            $result = Evaluate-Condition -valueBefore $valueBefore -valueAfter $valueAfter -conditions $criteria
-            Write-Output "Field: $($_.field_name), Offset: $byteOffset, Result: $result"
+            $result = Evaluate-Condition -valueBefore $valueBefore -valueAfter $valueAfter -conditions $condition
+            if ($result) {
+                Write-Output "Field: $($_.field_name), Offset: $byteOffset, Result: $($_.criteria)"
+            }
         }
     }
 }
