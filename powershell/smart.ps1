@@ -34,16 +34,17 @@ $excel.Quit()
 # Function to evaluate conditions
 function Evaluate-Condition {
     param (
-        [int]$valueBefore,
-        [int]$valueAfter,
+        [double]$valueBefore,
+        [double]$valueAfter,
         [string]$conditions
     )
 
     foreach ($condition in $conditions -split ";") {
         if ($condition -match "^(\w+):(\d+)$") {
             $operator = $matches[1]
-            $threshold = [int]$matches[2]
+            $threshold = [double]$matches[2]
             Write-Host "Operator: $operator, Threshold: $threshold"
+
             switch ($operator) {
                 "gt" { if ($valueAfter -gt $threshold) { return $true } }
                 "lt" { if ($valueAfter -lt $threshold) { return $true } }
@@ -65,30 +66,69 @@ function Evaluate-Condition {
     return $false
 }
 
-# Filter data by customer and compare values
+# Function to extract bytes based on byte_offset
+function Get-Bytes {
+    param (
+        [byte[]]$data,
+        [string]$byteOffset
+    )
+
+    if ($byteOffset -match "^(\d+):(\d+)$") {
+        $end = [int]$matches[1]
+        $start = [int]$matches[2]
+        $length = $end - $start + 1
+        $bytes = $data[$start..($start + $length - 1)]
+    }
+    elseif ($byteOffset -match "^(\d+)$") {
+        $start = [int]$matches[1]
+        $bytes = @($data[$start])
+    }
+    else {
+        throw "Invalid byteOffset format: $byteOffset"
+    }
+
+    # Return the full byte array, regardless of length
+    return $bytes
+}
+
+# Function to filter data by customer and compare values
 function Compare-SmartData {
     param (
         [string]$Customer,
-        [hashtable]$SmartBefore,
-        [hashtable]$SmartAfter,
+        [byte[]]$SmartBefore,
+        [byte[]]$SmartAfter,
         [string]$ProductKey  # Specify the product key dynamically (e.g., 'product3')
     )
 
-    $data | Where-Object { $_.customer -eq $Customer -or $_.customer -eq "NVME" -or $_.customer -eq "NVME_$Customer" } | ForEach-Object {
+    $data | Where-Object { $_.customer -eq $Customer } | ForEach-Object {
         $byteOffset = $_.byte_offset
-        $condition = $_.PSObject.Properties[$ProductKey].Value  # Dynamically access the product key
+        $criteria = $_.PSObject.Properties[$ProductKey].Value  # Dynamically access the product key
         Write-Output "$($_.customer), Offset: $byteOffset, condition: $condition"
 
-        if ($SmartBefore.ContainsKey($byteOffset) -and $SmartAfter.ContainsKey($byteOffset)) {
-            $valueBefore = $SmartBefore[$byteOffset]
-            $valueAfter = $SmartAfter[$byteOffset]
+        try {
+            $bytesBefore = Get-Bytes -data $SmartBefore -byteOffset $byteOffset
+            $bytesAfter = Get-Bytes -data $SmartAfter -byteOffset $byteOffset
 
-            $result = Evaluate-Condition -valueBefore $valueBefore -valueAfter $valueAfter -conditions $condition
+            # Convert byte arrays to numeric values
+            $valueBefore = [System.BitConverter]::ToUInt64(@($bytesBefore + (0..(7 - $bytesBefore.Count) | ForEach-Object { 0x00 }))[0..7], 0)
+            $valueAfter = [System.BitConverter]::ToUInt64(@($bytesAfter + (0..(7 - $bytesAfter.Count) | ForEach-Object { 0x00 }))[0..7], 0)
+
+            $result = Evaluate-Condition -valueBefore $valueBefore -valueAfter $valueAfter -conditions $criteria
             if ($result) {
                 Write-Output "Field: $($_.field_name), Offset: $byteOffset, Result: $($_.criteria)"
             }
         }
+        catch {
+            Write-Output "Error processing byteOffset $byteOffset : $_"
+        }
     }
 }
 
-Compare-SmartData -Customer "DELL" -SmartBefore @{ "1" = 100; "5:2" = 200 } -SmartAfter @{ "1" = 110; "5:2" = 190 } -ProductKey "product3"
+# Example binary data for SmartBefore and SmartAfter (512 bytes each)
+$SmartBefore = [byte[]](0..255)
+$SmartAfter = [byte[]](0..255)
+
+Compare-SmartData -Customer "NVME" -SmartBefore $SmartBefore -SmartAfter $SmartAfter -ProductKey "product3"
+Compare-SmartData -Customer "NVME_DELL" -SmartBefore $SmartBefore -SmartAfter $SmartAfter -ProductKey "product3"
+Compare-SmartData -Customer "DELL" -SmartBefore $SmartBefore -SmartAfter $SmartAfter -ProductKey "product3"
+
