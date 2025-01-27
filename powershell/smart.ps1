@@ -43,7 +43,7 @@ function Evaluate-Condition {
         if ($_ -match "^(\w+):(\d+)$") {
             $operator = $matches[1]
             $threshold = [int]$matches[2]
-
+            Write-Host "Operator: $operator, Threshold: $threshold"
             switch ($operator) {
                 "gt" { if ($valueAfter -gt $threshold) { return $true } }
                 "lt" { if ($valueAfter -lt $threshold) { return $true } }
@@ -51,6 +51,12 @@ function Evaluate-Condition {
                 "le" { if ($valueAfter -le $threshold) { return $true } }
                 "ne" { if ($valueAfter -ne $threshold) { return $true } }
                 "eq" { if ($valueAfter -eq $threshold) { return $true } }
+            }
+        } else {
+            Write-Host "Condition: $_"
+            switch ($_) {
+                "inc" { if ($valueAfter -gt $valueBefore) { return $true } }
+                "dec" { if ($valueAfter -lt $valueBefore) { return $true } }
             }
         }
     }
@@ -66,7 +72,7 @@ function Compare-SmartData {
         [string]$ProductKey  # Specify the product key dynamically (e.g., 'product3')
     )
 
-    $data | Where-Object { $_.customer -eq $Customer -or $_.customer -eq "NVME" } | ForEach-Object {
+    $data | Where-Object { $_.customer -eq $Customer -or $_.customer -eq "NVME" -or $_.customer -eq "NVME_$Customer" } | ForEach-Object {
         $byteOffset = $_.byte_offset
         $criteria = $_.PSObject.Properties[$ProductKey].Value  # Dynamically access the product key
         Write-Output "$($_.customer), Offset: $byteOffset, condition: $criteria"
@@ -81,4 +87,4 @@ function Compare-SmartData {
     }
 }
 
-Compare-SmartData -Customer "DELL" -SmartBefore @{ "1" = 100; "2" = 200 } -SmartAfter @{ "1" = 110; "2" = 190 } -ProductKey "product2"
+Compare-SmartData -Customer "DELL" -SmartBefore @{ "1" = 100; "5:2" = 200 } -SmartAfter @{ "1" = 110; "5:2" = 190 } -ProductKey "product3"
