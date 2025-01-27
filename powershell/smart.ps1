@@ -34,13 +34,13 @@ $excel.Quit()
 # Function to evaluate conditions
 function Evaluate-Condition {
     param (
-        [string]$valueBefore,
-        [string]$valueAfter,
+        [int]$valueBefore,
+        [int]$valueAfter,
         [string]$conditions
     )
 
-    $conditions -split ";" | ForEach-Object {
-        if ($_ -match "^(\w+):(\d+)$") {
+    foreach ($condition in $conditions -split ";") {
+        if ($condition -match "^(\w+):(\d+)$") {
             $operator = $matches[1]
             $threshold = [int]$matches[2]
             Write-Host "Operator: $operator, Threshold: $threshold"
@@ -52,11 +52,13 @@ function Evaluate-Condition {
                 "ne" { if ($valueAfter -ne $threshold) { return $true } }
                 "eq" { if ($valueAfter -eq $threshold) { return $true } }
             }
-        } else {
-            Write-Host "Condition: $_"
-            switch ($_) {
+        }
+        else {
+            Write-Host "Condition: $condition"
+            switch ($condition) {
                 "inc" { if ($valueAfter -gt $valueBefore) { return $true } }
                 "dec" { if ($valueAfter -lt $valueBefore) { return $true } }
+                "ne" { if ($valueAfter -ne $valueBefore) { return $true } }
             }
         }
     }
