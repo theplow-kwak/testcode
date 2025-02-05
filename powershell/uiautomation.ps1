@@ -377,14 +377,20 @@ function SelectMenuItem {
     $condition = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::AutomationIdProperty, $automationId)
     $menuBar = $windowElement.FindFirst([Windows.Automation.TreeScope]::Subtree, [Windows.Automation.AndCondition]::new($condition, $type_menubar))
     $currentElement = $menuBar
-
+    write-host "menuBar"
+    Write-Host "$($currentElement.Current.LocalizedControlType) : $($element.Current.AutomationId) - $($element.Current.Name),  $($element.Current.AcceleratorKey)"
+    
     foreach ($menuItemName in $menuPath) {
         # Find the next menu item in the path
-        $menuItem = $currentElement.FindFirst(
-            [Windows.Automation.TreeScope]::Subtree, # [Windows.Automation.Condition]::TrueCondition
-            [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::NameProperty, $menuItemName)
+        $menuItem = $currentElement.FindAll(
+            [Windows.Automation.TreeScope]::Subtree, [Windows.Automation.Condition]::TrueCondition
+            # [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::NameProperty, $menuItemName)
         )
 
+        write-host ""
+        foreach ($element in $menuItem) {
+            Write-Host "$($element.Current.LocalizedControlType) : $($element.Current.AutomationId) - $($element.Current.Name),  $($element.Current.AcceleratorKey)"
+        }
         if ($null -eq $menuItem) {
             Write-Output "Menu item '$menuItemName' not found."
             Continue;

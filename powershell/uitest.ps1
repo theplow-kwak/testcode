@@ -58,9 +58,11 @@ $appWindow = Get-ApplicationWindow -partialWindowTitle $partialWindowTitle
 if ($null -eq $appWindow) {
     Write-Error "Could not find the application window."
 }
-SearchControl -windowElement $appWindow
-$menubar = Get-ControlElement -windowElement $appWindow -automationId "MenuBar"
-SearchControl -windowElement $menubar
+# SearchControl -windowElement $appWindow
+# $menubar = Get-ControlElement -windowElement $appWindow -automationId "MenuBar"
+# Write-Host "SearchControl"
+# SearchControl -windowElement $menubar
+Write-Host "SelectMenuItem"
 SelectMenuItem -windowElement $appWindow -automationId "MenuBar" -menuPath @("File", "Save (text)")
 
 # if ($null -ne $window) {
