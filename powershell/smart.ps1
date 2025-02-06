@@ -3,20 +3,12 @@ This PowerShell script reads an Excel file and compares "smart_before" and "smar
 based on conditions defined in the Excel file.
 #>
 
-# Load the Excel file using COMObject
-Import-Module $PSScriptRoot\importexcel\ImportExcel.psd1 -Force
-
-$PWDScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path  # Get the script's directory path
-$excelFilePath = Join-Path -Path $PWDScriptRoot -ChildPath "smart.xlsx"  # Update with your file path
-$data = Import-Excel -Path $excelFilePath -StartRow 3
-
 function Read-ExcelData {
     param (
         [string]$FilePath
     )
     $excel = New-Object -ComObject Excel.Application
-    $excelFilePath = Join-Path -Path $PWDScriptRoot -ChildPath "smart.xlsx"  # Update with your file path
-    $workbook = $excel.Workbooks.Open($excelFilePath)
+    $workbook = $excel.Workbooks.Open($FilePath)
     $sheet = $workbook.Sheets.Item(1)
 
     # Read the header (first row) to use as column names
@@ -40,6 +32,7 @@ function Read-ExcelData {
     # Close Excel
     $workbook.Close($false)
     $excel.Quit()
+    return $data
 }
 
 # Function to evaluate conditions
@@ -162,12 +155,25 @@ function Compare-SmartData {
     }
 }
 
+# Load the Excel file using COMObject
+# Import-Module $PSScriptRoot\importexcel\ImportExcel.psd1 -Force
+
+$PWDScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path  # Get the script's directory path
+$excelFilePath = Join-Path -Path $PWDScriptRoot -ChildPath "smart.xlsx"  # Update with your file path
+# $data = Import-Excel -Path $excelFilePath -StartRow 3
+$data = Read-ExcelData -FilePath $excelFilePath
+
 # Example binary data for SmartBefore and SmartAfter (512 bytes each)
 $SmartBefore = New-Object byte[] 512
 [System.Random]::new().NextBytes($SmartBefore)
 
 $SmartAfter = New-Object byte[] 512
 [System.Random]::new().NextBytes($SmartAfter)
+
+$offset = "5:4"
+$target = $data | Where-Object { $_.customer -eq "NVME" } | where-object { $_.byte_offset -eq $offset } 
+Write-Host $target.criteria
+
 Compare-SmartData -Customer "NVME" -SmartBefore $SmartBefore -SmartAfter $SmartAfter -ProductKey "PCB01"
 Compare-SmartData -Customer "NVME_DELL" -SmartBefore $SmartBefore -SmartAfter $SmartAfter -ProductKey "PCB01"
 Compare-SmartData -Customer "DELL" -SmartBefore $SmartBefore -SmartAfter $SmartAfter -ProductKey "PCB01"
