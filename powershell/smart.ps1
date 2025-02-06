@@ -5,21 +5,22 @@ based on conditions defined in the Excel file.
 
 function Read-ExcelData {
     param (
-        [string]$FilePath
+        [string]$Path,
+        [int]$StartRow = 1
     )
     $excel = New-Object -ComObject Excel.Application
-    $workbook = $excel.Workbooks.Open($FilePath)
+    $workbook = $excel.Workbooks.Open($Path)
     $sheet = $workbook.Sheets.Item(1)
 
     # Read the header (first row) to use as column names
     $headers = @()
     for ($col = 1; $col -le $sheet.UsedRange.Columns.Count; $col++) {
-        $headers += $sheet.Cells.Item(1, $col).Value2
+        $headers += $sheet.Cells.Item($StartRow, $col).Value2
     }
 
     # Read the data into an array of objects
     $data = @()
-    $row = 2  # Start from the second row since the first row is the header
+    $row = $StartRow + 1  # Start from the second row since the first row is the header
     while ($null -ne $sheet.Cells.Item($row, 1).Value2) {
         $item = @{}
         for ($col = 1; $col -le $headers.Count; $col++) {
@@ -156,12 +157,12 @@ function Compare-SmartData {
 }
 
 # Load the Excel file using COMObject
-# Import-Module $PSScriptRoot\importexcel\ImportExcel.psd1 -Force
+Import-Module $PSScriptRoot\importexcel\ImportExcel.psd1 -Force
 
 $PWDScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path  # Get the script's directory path
 $excelFilePath = Join-Path -Path $PWDScriptRoot -ChildPath "smart.xlsx"  # Update with your file path
-# $data = Import-Excel -Path $excelFilePath -StartRow 3
-$data = Read-ExcelData -FilePath $excelFilePath
+$data = Import-Excel -Path $excelFilePath -StartRow 3
+$data2 = Read-ExcelData -Path $excelFilePath -StartRow 3
 
 # Example binary data for SmartBefore and SmartAfter (512 bytes each)
 $SmartBefore = New-Object byte[] 512
