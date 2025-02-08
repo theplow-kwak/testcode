@@ -124,14 +124,18 @@ function Compare-SmartData {
         [string]$ProductKey  # Specify the product key dynamically (e.g., 'product3')
     )
 
+    $FailCount = 0
+    $WarningCount = 0
+
     $data | Where-Object { $_.customer -eq $Customer } | ForEach-Object {
         $byteOffset = $_.byte_offset
+        $criteria = $_.criteria
         $condition = $_.PSObject.Properties[$ProductKey].Value  # Dynamically access the product key
-        
+        $Result = "Not Evaluated"
+       
         # Proceed only if condition is not empty or null
         if (-not [string]::IsNullOrEmpty($condition)) {
-            Write-Output "$($_.customer), Offset: $byteOffset, condition: $condition"
-
+            $Result = "PASS"
             try {
                 $bytesBefore = Get-Bytes -data $SmartBefore -byteOffset $byteOffset
                 $bytesAfter = Get-Bytes -data $SmartAfter -byteOffset $byteOffset
@@ -143,38 +147,61 @@ function Compare-SmartData {
                 $bytesBefore = ($bytesBefore | ForEach-Object { '{0:x2}' -f $_ }) -join '' 
                 $bytesAfter = ($bytesAfter | ForEach-Object { '{0:x2}' -f $_ }) -join '' 
 
-                Write-Output "valueBefore: $bytesBefore ($valueBefore), valueAfter: $bytesAfter ($valueAfter)"
-                $result = Evaluate-Condition -valueBefore $valueBefore -valueAfter $valueAfter -conditions $condition
-                if ($result) {
-                    Write-Output "Field: $($_.field_name), Offset: $byteOffset, Result: $($_.criteria)"
+                $ret = Evaluate-Condition -valueBefore $valueBefore -valueAfter $valueAfter -conditions $condition
+                if ($ret) {
+                    switch ($criteria) {
+                        "FAIL" { $FailCount++ }
+                        "WARNING" { $WarningCount++ }
+                    }
+                    $Result = $criteria
                 }
             }
             catch {
-                Write-Output "Error processing byteOffset $byteOffset : $_"
+                Write-Host "Error processing byteOffset $byteOffset : $_"
             }
         }
+        Write-Host "$Customer, $ProductKey, $byteOffset, $condition, $bytesBefore ($valueBefore) <=> $bytesAfter ($valueAfter), $($_.field_name) ==> $Result"
     }
+    Write-Host "FailCount: $FailCount, WarningCount: $WarningCount"
+    return $FailCount, $WarningCount
 }
 
-# Load the Excel file using COMObject
-Import-Module $PSScriptRoot\importexcel\ImportExcel.psd1 -Force
+function Check-SmartData {
+    # Load the Excel file using COMObject
+    Import-Module $PSScriptRoot\importexcel\ImportExcel.psd1 -Force
 
-$PWDScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path  # Get the script's directory path
-$excelFilePath = Join-Path -Path $PWDScriptRoot -ChildPath "smart.xlsx"  # Update with your file path
-$data = Import-Excel -Path $excelFilePath -StartRow 3
-$data2 = Read-ExcelData -Path $excelFilePath -StartRow 3
+    $excelFilePath = Join-Path -Path $PSScriptRoot -ChildPath "smart.xlsx"  # Update with your file path
+    $data = Import-Excel -Path $excelFilePath -StartRow 3
+    $data2 = Read-ExcelData -Path $excelFilePath -StartRow 3
 
-# Example binary data for SmartBefore and SmartAfter (512 bytes each)
-$SmartBefore = New-Object byte[] 512
-[System.Random]::new().NextBytes($SmartBefore)
+    # Example binary data for SmartBefore and SmartAfter (512 bytes each)
+    $SmartBefore = New-Object byte[] 512
+    [System.Random]::new().NextBytes($SmartBefore)
+    sleep 1
+    $SmartAfter = New-Object byte[] 512
+    [System.Random]::new().NextBytes($SmartAfter)
 
-$SmartAfter = New-Object byte[] 512
-[System.Random]::new().NextBytes($SmartAfter)
+    $TotalFailCount = 0
+    $TotalWarningCount = 0
+    $product = "product2"
 
-$offset = "5:4"
-$target = $data | Where-Object { $_.customer -eq "NVME" } | where-object { $_.byte_offset -eq $offset } 
-Write-Host $target.criteria
+    $result = Compare-SmartData -Customer "NVME" -SmartBefore $SmartBefore -SmartAfter $SmartAfter -ProductKey $product
+    $TotalFailCount += $result[0]
+    $TotalWarningCount += $result[1]
 
-Compare-SmartData -Customer "NVME" -SmartBefore $SmartBefore -SmartAfter $SmartAfter -ProductKey "PCB01"
-Compare-SmartData -Customer "NVME_DELL" -SmartBefore $SmartBefore -SmartAfter $SmartAfter -ProductKey "PCB01"
-Compare-SmartData -Customer "DELL" -SmartBefore $SmartBefore -SmartAfter $SmartAfter -ProductKey "PCB01"
+    $result = Compare-SmartData -Customer "NVME_DELL" -SmartBefore $SmartBefore -SmartAfter $SmartAfter -ProductKey $product
+    $TotalFailCount += $result[0]
+    $TotalWarningCount += $result[1]
+
+    $result = Compare-SmartData -Customer "DELL" -SmartBefore $SmartBefore -SmartAfter $SmartAfter -ProductKey $product
+    $TotalFailCount += $result[0]
+    $TotalWarningCount += $result[1]
+
+    $result = Compare-SmartData -Customer "HP" -SmartBefore $SmartBefore -SmartAfter $SmartAfter -ProductKey $product
+    $result = Compare-SmartData -Customer "MS" -SmartBefore $SmartBefore -SmartAfter $SmartAfter -ProductKey $product
+    Write-Host "Total FailCount: $TotalFailCount, Total WarningCount: $TotalWarningCount"
+    return ($TotalFailCount, $TotalWarningCount)
+}
+
+$fail, $warning = Check-SmartData
+write-host "Fail: $fail, Warning: $warning"
