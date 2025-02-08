@@ -7,6 +7,10 @@ if (-not $Strings) {
 try { [void] [System.Reflection.Assembly]::LoadWithPartialName("System.Drawing") }
 catch { Write-Warning -Message $Strings.SystemDrawingAvailable }
 
+foreach ($directory in @('Public')) {
+    Get-ChildItem -Path "$PSScriptRoot\$directory\*.ps1" | ForEach-Object { . $_.FullName }
+}
+
 #endregion
 
 if (($IsLinux -or $IsMacOS) -or $env:NoAutoSize) {
