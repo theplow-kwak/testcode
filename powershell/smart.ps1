@@ -49,14 +49,13 @@ function Evaluate-Condition {
             $operator = $matches[1]
             $threshold = [double]$matches[2]
             Write-Host "Operator: $operator, Threshold: $threshold"
-
             switch ($operator) {
-                "gt" { if ($valueAfter -gt $threshold) { return $true } }
-                "lt" { if ($valueAfter -lt $threshold) { return $true } }
-                "ge" { if ($valueAfter -ge $threshold) { return $true } }
-                "le" { if ($valueAfter -le $threshold) { return $true } }
-                "ne" { if ($valueAfter -ne $threshold) { return $true } }
-                "eq" { if ($valueAfter -eq $threshold) { return $true } }
+                "gt" { if (($valueBefore -gt $threshold) -or ($valueAfter -gt $threshold)) { return $true } }
+                "lt" { if (($valueBefore -lt $threshold) -or ($valueAfter -lt $threshold)) { return $true } }
+                "ge" { if (($valueBefore -ge $threshold) -or ($valueAfter -ge $threshold)) { return $true } }
+                "le" { if (($valueBefore -le $threshold) -or ($valueAfter -le $threshold)) { return $true } }
+                "ne" { if (($valueBefore -ne $threshold) -or ($valueAfter -ne $threshold)) { return $true } }
+                "eq" { if (($valueBefore -eq $threshold) -or ($valueAfter -eq $threshold)) { return $true } }
             }
         }
         else {
@@ -119,88 +118,122 @@ function Convert-BytesToNumber {
 function Compare-SmartData {
     param (
         [string]$Customer,
-        [byte[]]$SmartBefore,
-        [byte[]]$SmartAfter,
-        [string]$ProductKey  # Specify the product key dynamically (e.g., 'product3')
+        [string]$ProjectCode  # Specify the product key dynamically (e.g., 'product3')
     )
+    $_FailCount = 0
+    $_WarningCount = 0
 
-    $FailCount = 0
-    $WarningCount = 0
+    $CustomerPart = $Customer.Split('_')[0]
+    $SmartBefore = $SCRIPT:SmartBefore | Where-Object { $_.customer -eq $CustomerPart }
+    $SmartAfter = $SCRIPT:SmartAfter | Where-Object { $_.customer -eq $CustomerPart }
 
-    $data | Where-Object { $_.customer -eq $Customer } | ForEach-Object {
+    $SCRIPT:SMART_Criteria | Where-Object { $_.customer -eq $Customer } | ForEach-Object {
         $byteOffset = $_.byte_offset
-        $criteria = $_.criteria
-        $condition = $_.PSObject.Properties[$ProductKey].Value  # Dynamically access the product key
+        $condition = $_.PSObject.Properties[$ProjectCode].Value  # Dynamically access the product key
+        $Description = $_.field_name
+        $valueBeforeObj = $SmartBefore | Where-Object { $_.byte_offset -eq $byteOffset }
+        $valueBefore = $valueBeforeObj.value
+        $valueHexBefore = $valueBeforeObj.hex_value
+        $valueAfterObj = $SmartAfter | Where-Object { $_.byte_offset -eq $byteOffset }
+        $valueAfter = $valueAfterObj.value 
+        $valueHexAfter = $valueAfterObj.hex_value 
         $Result = "Not Evaluated"
-       
+        
         # Proceed only if condition is not empty or null
         if (-not [string]::IsNullOrEmpty($condition)) {
             $Result = "PASS"
             try {
-                $bytesBefore = Get-Bytes -data $SmartBefore -byteOffset $byteOffset
-                $bytesAfter = Get-Bytes -data $SmartAfter -byteOffset $byteOffset
-
-                # Convert byte arrays to numeric values
-                $valueBefore = Convert-BytesToNumber -bytes $bytesBefore
-                $valueAfter = Convert-BytesToNumber -bytes $bytesAfter
-
-                $bytesBefore = ($bytesBefore | ForEach-Object { '{0:x2}' -f $_ }) -join '' 
-                $bytesAfter = ($bytesAfter | ForEach-Object { '{0:x2}' -f $_ }) -join '' 
-
+                Write-Host "$($_.customer), $byteOffset, $condition, $valueBefore <==> $valueAfter"
                 $ret = Evaluate-Condition -valueBefore $valueBefore -valueAfter $valueAfter -conditions $condition
                 if ($ret) {
-                    switch ($criteria) {
-                        "FAIL" { $FailCount++ }
-                        "WARNING" { $WarningCount++ }
-                    }
-                    $Result = $criteria
+                    $Result = $_.criteria
+                    Write-Host "SMART:$Result - $Customer,$byteOffset,$Description,$condition, $valueBefore <==> $valueAfter"
                 }
             }
             catch {
-                Write-Host "Error processing byteOffset $byteOffset : $_"
+                Write-Host "SMART: Error processing $Customer byteOffset $byteOffset : $_"
+            }
+            switch ($Result.ToUpper().Trim()) {
+                "WARNING" { $_WarningCount++ }
+                "FAIL" { $_FailCount++ }
             }
         }
-        Write-Host "$Customer, $ProductKey, $byteOffset, $condition, $bytesBefore ($valueBefore) <=> $bytesAfter ($valueAfter), $($_.field_name) ==> $Result"
+        Add-Content -Path $SCRIPT:SummarySMARTData -Value "$Customer,$byteOffset,$valueHexBefore,$valueHexAfter,$Description,$Result"
     }
-    Write-Host "FailCount: $FailCount, WarningCount: $WarningCount"
-    return $FailCount, $WarningCount
+    return $_FailCount, $_WarningCount
 }
 
-function Check-SmartData {
-    # Load the Excel file using COMObject
-    Import-Module $PSScriptRoot\importexcel\ImportExcel.psd1 -Force
+function Get-CustomerCode {
+    $InternalFirmwareRevision = Get-RegInternalFirmwareRevision
+    if ($InternalFirmwareRevision.Length -eq 8) {
+        $CustomerCode = switch ($InternalFirmwareRevision[4]) {
+            "H" { "HP" }
+            "M" { "MS" }
+            "3" { "LENOVO" }
+            "D" { "DELL" }
+            "5" { "ASUS" }
+            "K" { "FACEBOOK" }
+            default { "UNKNOWN" }
+        }
+        return $CustomerCode
+    }
+    return "UNKNOWN"
+}
 
-    $excelFilePath = Join-Path -Path $PSScriptRoot -ChildPath "smart.xlsx"  # Update with your file path
-    $data = Import-Excel -Path $excelFilePath -StartRow 3
-    $data2 = Read-ExcelData -Path $excelFilePath -StartRow 3
+function Get-ProjectCode {
+    $ProjectCode = $null
+    $deviceString = $TargetDeviceInfo.NVMeInstanceId
+    $devPartMatch = [regex]::Match($deviceString, 'DEV_([^&]+)')
+    if ($devPartMatch.Success) {
+        $devPartValue = $devPartMatch.Groups[1].Value
+        $ProjectCode = $SCRIPT:SMART_Criteria[0].PSObject.Properties.Name | Where-Object { $_ -like "*$devPartValue*" } | Select-Object -First 1
+    }
+    if (-not $ProjectCode) {
+        $ProjectCode = $SCRIPT:SMART_Criteria[0].PSObject.Properties.Name | Where-Object { $_ -like "*PCB01*" } | Select-Object -First 1
+    }
+    return $ProjectCode
+}
 
-    # Example binary data for SmartBefore and SmartAfter (512 bytes each)
-    $SmartBefore = New-Object byte[] 512
-    [System.Random]::new().NextBytes($SmartBefore)
-    sleep 1
-    $SmartAfter = New-Object byte[] 512
-    [System.Random]::new().NextBytes($SmartAfter)
+function Compare-SmartAttributeValues {
+    Import-Module $Global:INCLUDE_PATH\importexcel\ImportExcel.psd1 -Force
+    $SMARTexcelFilePath = Join-Path -Path $Global:CONFIG_PATH -ChildPath "smart\smart_management.xlsx"
 
-    $TotalFailCount = 0
-    $TotalWarningCount = 0
-    $product = "product2"
+    $SCRIPT:SMART_Criteria = Import-Excel -Path $SMARTexcelFilePath -StartRow 3
+    $CustomerCode = Get-CustomerCode
+    $ProjectCode = Get-ProjectCode
 
-    $result = Compare-SmartData -Customer "NVME" -SmartBefore $SmartBefore -SmartAfter $SmartAfter -ProductKey $product
-    $TotalFailCount += $result[0]
-    $TotalWarningCount += $result[1]
+    $PreSMARTDataFile = "$LOG_PATH\smart_before.csv"
+    $PostSMARTDataFile = "$LOG_PATH\smart_after.csv"
+    $SCRIPT:SummarySMARTData = "$LOG_PATH\smart_summary.csv"
+    $SCRIPT:SmartBefore = Import-Csv -Path $PreSMARTDataFile
+    $SCRIPT:SmartAfter = Import-Csv -Path $PostSMARTDataFile
+    [int]$FailCount = 0
+    [int]$WarningCount = 0
 
-    $result = Compare-SmartData -Customer "NVME_DELL" -SmartBefore $SmartBefore -SmartAfter $SmartAfter -ProductKey $product
-    $TotalFailCount += $result[0]
-    $TotalWarningCount += $result[1]
+    $_tmp = New-Item -Path $SCRIPT:SummarySMARTData -ItemType File -Force
+    $_tmp = Add-Content -Path $SCRIPT:SummarySMARTData -Value "customer,byte_offset,Before Value (HEX),After Value (HEX),field_name,result"
 
-    $result = Compare-SmartData -Customer "DELL" -SmartBefore $SmartBefore -SmartAfter $SmartAfter -ProductKey $product
-    $TotalFailCount += $result[0]
-    $TotalWarningCount += $result[1]
+    $result = Compare-SmartData -Customer "NVME" -ProjectCode $ProjectCode
+    $FailCount += $result[0]
+    $WarningCount += $result[1]
 
-    $result = Compare-SmartData -Customer "HP" -SmartBefore $SmartBefore -SmartAfter $SmartAfter -ProductKey $product
-    $result = Compare-SmartData -Customer "MS" -SmartBefore $SmartBefore -SmartAfter $SmartAfter -ProductKey $product
-    Write-Host "Total FailCount: $TotalFailCount, Total WarningCount: $TotalWarningCount"
-    return ($TotalFailCount, $TotalWarningCount)
+    $NvmeCustomerCode = switch ($CustomerCode) {
+        "HP" { "NVME_HP" }
+        "DELL" { "NVME_DELL" }
+        default { "NVME_GEN" }
+    }
+    $result = Compare-SmartData -Customer $NvmeCustomerCode -ProjectCode $ProjectCode
+    $FailCount += $result[0]
+    $WarningCount += $result[1]
+
+    $result = Compare-SmartData -Customer $CustomerCode -ProjectCode $ProjectCode
+    $FailCount += $result[0]
+    $WarningCount += $result[1]
+
+    $result = Compare-SmartData -Customer "WAI" -ProjectCode $ProjectCode
+    $result = Compare-SmartData -Customer "WAF" -ProjectCode $ProjectCode
+    Write-Host "[SMART][$CustomerCode][$ProjectCode] Warning: $WarningCount, Fail: $FailCount"
+    return $FailCount, $WarningCount
 }
 
 $fail, $warning = Check-SmartData

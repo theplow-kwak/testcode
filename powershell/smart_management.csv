@@ -1,0 +1,120 @@
+,,,,,,
+,,,,,,
+customer,field_name,byte_offset,criteria,remarks,PCB01_1069,PVC10_1F69
+NVME,Critical Warning,000,FAIL,FAIL: 전/후 값이 다를 경우,ne,ne
+NVME,Composite Temperature,002:001,FAIL,FAIL: 273보다 작거나 373보다 클 경우,lt:273;gt:373,lt:273;gt:373
+NVME,Available Spare,003,FAIL,FAIL: 0보다 작거나 100보다 클 경우,lt:0;gt:100,lt:0;gt:100
+NVME_GEN,Available Spare Threshold,004,FAIL,"FAIL: [DELL] 50 > [HP] 5 > [Other] 10 >",gt:10,gt:10
+NVME_DELL,Available Spare Threshold,004,FAIL,"FAIL: [DELL] 50 > [HP] 5 > [Other] 10 >",gt:50,gt:50
+NVME_HP,Available Spare Threshold,004,FAIL,"FAIL: [DELL] 50 > [HP] 5 > [Other] 10 >",gt:5,gt:5
+NVME,Percentage Used,005,FAIL,FAIL: 전/후 값이 감소하거나 100보다 클 경우,dec;gt:100,dec;gt:100
+NVME,Endurance Group Critical Warning Summary:,006,WARNING,0,,
+NVME,Reserved,031:007,WARNING,0,,
+NVME,Data Units Read,047:032,FAIL,FAIL: 전/후 값이 감소하는 경우,dec,dec
+NVME,Data Units Written,063:048,FAIL,FAIL: 전/후 값이 감소하는 경우,dec,dec
+NVME,Host Read Commands,079:064,FAIL,FAIL: 전/후 값이 감소하는 경우,dec,dec
+NVME,Host Write Commands,095:080,FAIL,FAIL: 전/후 값이 감소하는 경우,dec,dec
+NVME,Controller Busy Time,111:096,FAIL,FAIL: 전/후 값이 감소하는 경우,dec,dec
+NVME,Power Cycles,127:112,FAIL,FAIL: 전/후 값이 감소하는 경우,dec,dec
+NVME,Power On Hours,143:128,FAIL,FAIL: 전/후 값이 감소하는 경우,dec,dec
+NVME,Unsafe Shutdowns,159:144,FAIL,FAIL: 전/후 값이 감소하는 경우,dec,dec
+NVME,Media & Data Integrity Errors,175:160,FAIL,FAIL: 전/후 값이 다를 경우,ne,ne
+NVME,Number of Error Information Log Entries,191:176,FAIL,FAIL: 전/후 값이 다를 경우,ne,ne
+NVME,Warning Composite Temperature Time (Time in minutes),195:192,FAIL,FAIL: 전/후 값이 증가하는 경우,inc,inc
+NVME,Critical Composite Temperature Time (Time in minutes),199:196,FAIL,FAIL: 전/후 값이 증가하는 경우,inc,inc
+NVME,Temperature Sensor Temperature(TST) 1,201:200,FAIL,FAIL: 273보다 작거나 373보다 클 경우,lt:273;gt:373,lt:273;gt:373
+NVME,Temperature Sensor Temperature(TST) 2,203:202,FAIL,FAIL: 273보다 작거나 373보다 클 경우,lt:273;gt:373,lt:273;gt:373
+NVME,Temperature Sensor 3,205:204,WARNING,0,,
+NVME,Temperature Sensor 4,207:206,WARNING,0,,
+NVME,Temperature Sensor 5,209:208,WARNING,0,,
+NVME,Temperature Sensor 6,211:210,WARNING,0,,
+NVME,Temperature Sensor 7,213:212,WARNING,0,,
+NVME,Temperature Sensor 8,215:214,WARNING,0,,
+NVME,Thermal Management Temperature 1 CNT,219:216,FAIL,FAIL: 전/후 값이 감소하는 경우,dec,dec
+NVME,Thermal Management Temperature 2 CNT,223:220,FAIL,FAIL: 전/후 값이 감소하는 경우,dec,dec
+NVME,Total Time For Thermal MT 1,227:224,FAIL,FAIL: 전/후 값이 감소하는 경우,dec,dec
+NVME,Total Time For Thermal MT 2,231:228,FAIL,FAIL: 전/후 값이 감소하는 경우,dec,dec
+NVME,Reserved,511:232,WARNING,0,,
+HP,Failure to authenticate firmware,007:000,WARNING,0,,
+HP,Authorized access of Vendor Specific command,015:008,WARNING,0,,
+HP,Unauthorized access of Vendor Specific command,023:016,WARNING,0,,
+HP,Attempt to download SED firmware,031:024,WARNING,0,,
+HP,Attempt to download non-SED firmware,039:032,WARNING,0,,
+HP,Attempt to download non-HP firmware,047:040,WARNING,0,,
+HP,Failure to Secure Erase,055:048,FAIL,FAIL: 전/후 값이 다를 경우,ne,ne
+HP,Failure to Sanitize,063:056,FAIL,FAIL: 전/후 값이 다를 경우,ne,ne
+HP,Total number of events,071:064,WARNING,0,,
+HP,Time Stamp,079:072,WARNING,0,,
+HP,Reserved,511:080,WARNING,0,,
+MS,SMART-1 : Physical Media Units Written,015:000,FAIL,FAIL: 전/후 값이 감소하는 경우,dec,dec
+MS,SMART-2 : Physical Media Units Read,031:016,FAIL,FAIL: 전/후 값이 감소하는 경우,dec,dec
+MS,SMART-3 : Bad User NAND Blocks,039:032,FAIL,FAIL: 전/후 값이 다를 경우,ne,ne
+MS,SMART-4 : Bad System NAND Blocks,047:040,FAIL,FAIL: 전/후 값이 다를 경우,ne,ne
+MS,SMART-5 : XOR Recovery count,055:048,WARNING,0,,
+MS,SMART-6 : Uncorrectable read error count,063:056,FAIL,"FAIL: 전/후 값이 다를 경우 NVM Media Integrity Error와 다를 경우",,
+MS,SMART-7 : Soft ECC error count,071:064,WARNING,WARNING: 전/후 값이 다를 경우,ne,ne
+MS,SMART-8 : End to End Correction Counts,079:072,FAIL,FAIL: 전/후 값이 감소하는 경우,dec,dec
+MS,SMART-9 : System data % used,080,FAIL,FAIL: 전/후 값이 감소하는 경우,dec,dec
+MS,SMART-10 : Refresh Counts,087:081,WARNING,0,,
+MS,SMART-11 : User data erase counts,095:088,WARNING,0,,
+MS,SMART-12 : Thermal throttling status and count,097:096,WARNING,0,,
+MS,SMART-13 : DSSD Specifi-cation Ver-sion,103:098,WARNING,0,,
+MS,SMART-14 : PCIe Correctable Error count,111:104,FAIL,FAIL: 전/후 값이 감소하는 경우,dec,dec
+MS,SMART-15 : Incomplete Shutdowns,115:112,WARNING,0,,
+MS,SMART-16 : Reserved,119:116,FAIL,FAIL: 0이 아니면,ne:0,ne:0
+MS,SMART-17 : % Free Blocks,120,WARNING,0,,
+MS,SMART-18 : Reserved,127:121,FAIL,FAIL: 0이 아니면,ne:0,ne:0
+MS,SMART-19 : Capacitor Health (Optional),129:128,WARNING,0,,
+MS,SMART-20 : NVMe Errata Version,130,WARNING,0,,
+MS,SMART-32 : NVMe Command Set Errata Version,131,WARNING,0,,
+MS,SMART-30 : Reserved,135:132,FAIL,FAIL: 0이 아니면,ne:0,ne:0
+MS,SMART-21 : Unaligned I/O,143:136,WARNING,0,,
+MS,SMART-22 : Security Version Number,151:144,WARNING,0,,
+MS,SMART-23 : NUSE,159:152,WARNING,0,,
+MS,SMART-24 : PLP Start Count,175:160,FAIL,FAIL: 전/후 값이 감소하는 경우,dec,dec
+MS,SMART-25 : Endurance Estimate,191:176,WARNING,0,,
+MS,SMART-29 : PCIe Link Retraining Count,199:192,FAIL,FAIL: 전/후 값이 감소하는 경우,dec,dec
+MS,SMART-31 : Power State Change Count,207:200,FAIL,FAIL: 전/후 값이 감소하는 경우,dec,dec
+MS,SMART-33 : Lowest Per-mitted Firm-ware Version,215:208,FAIL,FAIL: Current External FW version과 다를 경우,,
+MS,SMART-26 : Reserved,493:216,FAIL,FAIL: 0이 아니면,ne:0,ne:0
+MS,SMART-27 : Log Page Version,495:494,WARNING,0,,
+MS,SMART-28 : Log Page GUID,511:496,WARNING,0,,
+LENOVO,Upper Case Character,002:000,WARNING,0,,
+LENOVO,Revision Byte:,003,WARNING,0,,
+LENOVO,Reseverd,019:004,WARNING,0,,
+LENOVO,Original manufacturing 8S bar-code information,049:020,WARNING,0,,
+LENOVO,Model Number,089:050,WARNING,0,,
+LENOVO,Serial Number,109:090,WARNING,0,,
+LENOVO,Current 8S label,139:110,WARNING,0,,
+LENOVO,Reseverd,223:140,WARNING,0,,
+LENOVO,Number of 512-byte sectors written to the NAND,239:224,WARNING,0,,
+LENOVO,Number of 512-byte sectors written to the NAND,243:240,WARNING,0,,
+LENOVO,written to the static SLC NAND buffer,259:244,WARNING,0,,
+LENOVO,Percentage Used,260,FAIL,FAIL: 전/후 값이 감소하거나 100보다 클 경우,dec;gt:100,
+LENOVO,Bare Drive FRU Number,270:261,WARNING,0,,
+LENOVO,Number of blocks relocated by Read Patrol,278:271,WARNING,WARNING: 전/후 값이 다를 경우,ne,
+LENOVO,Average number of PE cycles,280:279,FAIL,FAIL: 전/후 값이 감소하는 경우,dec,
+LENOVO,Max number of PE cycles,282:281,FAIL,FAIL: 전/후 값이 감소하는 경우,dec,
+LENOVO,Number of Grown Bad Blocks,284:283,FAIL,FAIL: 전/후 값이 다를 경우,ne,
+LENOVO,Number of DRAM parity errors,286:285,WARNING,WARNING: 전/후 값이 다를 경우,ne,
+LENOVO,Number of SRAM parity errors,288:287,WARNING,WARNING: 전/후 값이 다를 경우,ne,
+LENOVO,Reseverd,479:289,WARNING,0,,
+LENOVO,Reseverd,511:480,WARNING,0,,
+DELL,Critical Warning,000,FAIL,FAIL: 0이 아니면,ne:0,
+DELL,Wear Leveling Count,005,FAIL,FAIL: 99 이상,gt:99,
+DELL,Used Reserved Block Count (Worst Case Component),006,FAIL,FAIL: (100-AvailableSpare)보다 작으면,,
+DELL,Used Reserved Block Count (SSD Total),007,WARNING,0,,
+DELL,Reserved Block Count (SSD Total),011:008,FAIL,FAIL: 1보다 작으면,lt:1,
+DELL,Minimun Temperature,013:012,FAIL,FAIL: 273보다 작거나 373보다 크면,lt:273;gt:373,
+DELL,Maximun Temperature,015:014,FAIL,FAIL: 273보다 작거나 373보다 크면,lt:273;gt:373,
+DELL,Total Data Written by the Controller to the NAND,031:016,FAIL,FAIL: 전/후 값이 감소하는 경우,dec,
+DELL,Accumulated occurrence with idle more than 10ms between I/O commands at NVMe operational mode,035:032,FAIL,FAIL: 전/후 값이 감소하는 경우,dec,
+DELL,Accumulated PS3 counter,039:036,FAIL,FAIL: 전/후 값이 감소하는 경우,dec,
+DELL,Counter of short power on,040,FAIL,FAIL: 전/후 값이 다를 경우,ne,
+DELL,Accumulated PS4 counter,044:041,FAIL,FAIL: 전/후 값이 감소하는 경우,dec,
+DELL,System Area Wear Level ,045,FAIL,FAIL: 90이상,gt:90,
+DELL,PCIe Correctable Error Count,053:046,FAIL,FAIL: 전/후 값이 감소하는 경우,dec,
+DELL,PCIe Link Retraining Count,061:054,FAIL,FAIL: 전/후 값이 감소하는 경우,dec,
+DELL,Reserved,511:062,WARNING,0,,
+WAI,(ec_slc_total + ec_tlc_total) / write_from_host,000,WARNING,0,,
+WAF,(written_to_tlc_user + written_to_slc_buf) / write_from_host,000,WARNING,0,,
