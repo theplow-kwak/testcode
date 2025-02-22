@@ -115,7 +115,7 @@ function Convert-BytesToNumber {
 }
 
 # Function to filter data by customer and compare values
-function Compare-SmartData {
+function Compare-SmartCustomer {
     param (
         [string]$Customer,
         [string]$ProjectCode  # Specify the product key dynamically (e.g., 'product3')
@@ -194,7 +194,7 @@ function Get-ProjectCode {
     return $ProjectCode
 }
 
-function Compare-SmartAttributeValues {
+function Compare-SmartData {
     Import-Module $Global:INCLUDE_PATH\importexcel\ImportExcel.psd1 -Force
     $SMARTexcelFilePath = Join-Path -Path $Global:CONFIG_PATH -ChildPath "smart\smart_management.xlsx"
 
@@ -213,28 +213,33 @@ function Compare-SmartAttributeValues {
     $_tmp = New-Item -Path $SCRIPT:SummarySMARTData -ItemType File -Force
     $_tmp = Add-Content -Path $SCRIPT:SummarySMARTData -Value "customer,byte_offset,Before Value (HEX),After Value (HEX),field_name,result"
 
-    $result = Compare-SmartData -Customer "NVME" -ProjectCode $ProjectCode
-    $FailCount += $result[0]
-    $WarningCount += $result[1]
-
     $NvmeCustomerCode = switch ($CustomerCode) {
         "HP" { "NVME_HP" }
         "DELL" { "NVME_DELL" }
         default { "NVME_GEN" }
     }
-    $result = Compare-SmartData -Customer $NvmeCustomerCode -ProjectCode $ProjectCode
+
+    $result = Compare-SmartCustomer -Customer "NVME" -ProjectCode $ProjectCode
     $FailCount += $result[0]
     $WarningCount += $result[1]
 
-    $result = Compare-SmartData -Customer $CustomerCode -ProjectCode $ProjectCode
+    $result = Compare-SmartCustomer -Customer $NvmeCustomerCode -ProjectCode $ProjectCode
     $FailCount += $result[0]
     $WarningCount += $result[1]
 
-    $result = Compare-SmartData -Customer "WAI" -ProjectCode $ProjectCode
-    $result = Compare-SmartData -Customer "WAF" -ProjectCode $ProjectCode
+    $result = Compare-SmartCustomer -Customer $CustomerCode -ProjectCode $ProjectCode
+    $FailCount += $result[0]
+    $WarningCount += $result[1]
+
+    $result = Compare-SmartCustomer -Customer "WAI" -ProjectCode $ProjectCode
+    $result = Compare-SmartCustomer -Customer "WAF" -ProjectCode $ProjectCode
     Write-Host "[SMART][$CustomerCode][$ProjectCode] Warning: $WarningCount, Fail: $FailCount"
     return $FailCount, $WarningCount
 }
 
-$fail, $warning = Check-SmartData
+$Global:INCLUDE_PATH = Split-Path -Parent $MyInvocation.MyCommand.Path
+$Global:CONFIG_PATH = Split-Path -Parent $MyInvocation.MyCommand.Path
+$LOG_PATH = ".\"
+
+$fail, $warning = Compare-SmartData
 write-host "Fail: $fail, Warning: $warning"
