@@ -3,50 +3,79 @@ This PowerShell script reads an Excel file and compares "smart_before" and "smar
 based on conditions defined in the Excel file.
 #>
 
+$SCRIPT:KernelService = Add-Type -Name 'Kernel32' -Namespace 'Win32' -PassThru -MemberDefinition @"
+    [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
+    public static extern IntPtr CreateFile(
+        String lpFileName,
+        UInt32 dwDesiredAccess,
+        UInt32 dwShareMode,
+        IntPtr lpSecurityAttributes,
+        UInt32 dwCreationDisposition,
+        UInt32 dwFlagsAndAttributes,
+        IntPtr hTemplateFile);
+
+    [DllImport("Kernel32.dll", SetLastError = true)]
+    public static extern bool DeviceIoControl(
+        IntPtr  hDevice,
+        int     oControlCode,
+        IntPtr  InBuffer,
+        int     nInBufferSize,
+        IntPtr  OutBuffer,
+        int     nOutBufferSize,
+        ref int pBytesReturned,
+        IntPtr  Overlapped);
+
+    [DllImport("kernel32.dll", SetLastError=true)]
+    public static extern bool CloseHandle(IntPtr hObject);
+"@
+
+Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+
+[StructLayout(LayoutKind.Sequential, Pack = 1)]
+public struct NVMeStorageQueryProperty {
+    public UInt32 PropertyId;
+    public UInt32 QueryType;
+    public UInt32 ProtocolType;
+    public UInt32 DataType;
+    public UInt32 ProtocolDataRequestValue;
+    public UInt32 ProtocolDataRequestSubValue;
+    public UInt32 ProtocolDataOffset;
+    public UInt32 ProtocolDataLength;
+    public UInt32 FixedProtocolReturnData;
+    public UInt32 ProtocolDataRequestSubValue2;
+    public UInt32 ProtocolDataRequestSubValue3;
+    public UInt32 ProtocolDataRequestSubValue4;
+
+    [MarshalAs(UnmanagedType.ByValArray, SizeConst = 512)]
+    public Byte[] SMARTData;
+}
+"@
+
+
 class SmartDataComparer {
     [string]$INCLUDE_PATH
     [string]$CONFIG_PATH
     [string]$LOG_PATH
-    [string]$SummarySMARTData
+    [string]$SummarySMARTDataFile
     [array]$SMART_Criteria
-    [array]$_SmartBefore
-    [array]$_SmartAfter
+    [array]$SmartBefore
+    [array]$SmartAfter
     [string]$CustomerCode
     [string]$ProjectCode
 
-    SmartDataComparer() {
-        $this.INCLUDE_PATH = Split-Path -Parent $MyInvocation.MyCommand.Path
-        $this.CONFIG_PATH = Split-Path -Parent $MyInvocation.MyCommand.Path
+    SmartDataComparer([int]$PhyDrvNo = 0) {
+        $this.PhyDrvNo = $PhyDrvNo
+        $this.INCLUDE_PATH = $PSScriptRoot
+        $this.CONFIG_PATH = $PSScriptRoot
         $this.LOG_PATH = ".\"
-    }
 
-    ReadExcelData([string]$Path, [int]$StartRow = 1) {
-        $excel = New-Object -ComObject Excel.Application
-        $workbook = $excel.Workbooks.Open($Path)
-        $sheet = $workbook.Sheets.Item(1)
-
-        # Read the header (first row) to use as column names
-        $headers = @()
-        for ($col = 1; $col -le $sheet.UsedRange.Columns.Count; $col++) {
-            $headers += $sheet.Cells.Item($StartRow, $col).Value2
-        }
-
-        # Read the data into an array of objects
-        $data = @()
-        $row = $StartRow + 1  # Start from the second row since the first row is the header
-        while ($null -ne $sheet.Cells.Item($row, 1).Value2) {
-            $item = @{ }
-            for ($col = 1; $col -le $headers.Count; $col++) {
-                $item[$headers[$col - 1]] = $sheet.Cells.Item($row, $col).Value2
-            }
-            $data += [PSCustomObject]$item
-            $row++
-        }
-
-        # Close Excel
-        $workbook.Close($false)
-        $excel.Quit()
-        $this.SMART_Criteria = $data
+        Import-Module "$($this.INCLUDE_PATH)\importexcel\ImportExcel.psd1"
+        $SMARTexcelFilePath = Join-Path -Path $this.CONFIG_PATH -ChildPath "smart\smart_management.xlsx"
+        $this.SMART_Criteria = Import-Excel -Path $SMARTexcelFilePath -StartRow 3
+        $this.GetCustomerCode()
+        $this.GetProjectCode()
     }
 
     [bool] EvaluateCondition([double]$valueBefore, [double]$valueAfter, [string]$conditions) {
@@ -115,17 +144,17 @@ class SmartDataComparer {
         $_WarningCount = 0
 
         $CustomerPart = $Customer.Split('_')[0]
-        $SmartBefore = $this.SmartBefore | Where-Object { $_.customer -eq $CustomerPart }
-        $SmartAfter = $this.SmartAfter | Where-Object { $_.customer -eq $CustomerPart }
+        $_SmartBefore = $this.SmartBefore | Where-Object { $_.customer -eq $CustomerPart }
+        $_SmartAfter = $this.SmartAfter | Where-Object { $_.customer -eq $CustomerPart }
 
         $this.SMART_Criteria | Where-Object { $_.customer -eq $Customer } | ForEach-Object {
             $byteOffset = $_.byte_offset
             $condition = $_.PSObject.Properties[$this.ProjectCode].Value  # Dynamically access the product key
             $Description = $_.field_name
-            $valueBeforeObj = $SmartBefore | Where-Object { $_.byte_offset -eq $byteOffset }
+            $valueBeforeObj = $_SmartBefore | Where-Object { $_.byte_offset -eq $byteOffset }
             $valueBefore = $valueBeforeObj.value
             $valueHexBefore = $valueBeforeObj.hex_value
-            $valueAfterObj = $SmartAfter | Where-Object { $_.byte_offset -eq $byteOffset }
+            $valueAfterObj = $_SmartAfter | Where-Object { $_.byte_offset -eq $byteOffset }
             $valueAfter = $valueAfterObj.value 
             $valueHexAfter = $valueAfterObj.hex_value 
             $Result = "Not Evaluated"
@@ -149,14 +178,14 @@ class SmartDataComparer {
                     "FAIL" { $_FailCount++ }
                 }
             }
-            Add-Content -Path $this.SummarySMARTData -Value "$Customer,$byteOffset,$valueHexBefore,$valueHexAfter,$Description,$Result"
+            Add-Content -Path $this.SummarySMARTDataFile -Value "$Customer,$byteOffset,$valueHexBefore,$valueHexAfter,$Description,$Result"
         }
         return $_FailCount, $_WarningCount
     }
 
     [void] GetCustomerCode() {
         try {
-            $InternalFirmwareRevision = Get-RegInternalFirmwareRevision
+            $InternalFirmwareRevision = "C0003000"
             if ($InternalFirmwareRevision.Length -eq 8) {
                 $this.CustomerCode = switch ($InternalFirmwareRevision[4]) {
                     "H" { "HP" }
@@ -176,7 +205,6 @@ class SmartDataComparer {
 
     [void] GetProjectCode() {
         try {
-            $this.ProjectCode = $null
             $deviceString = $Global:TargetDeviceInfo.NVMeInstanceId
             $devPartMatch = [regex]::Match($deviceString, 'DEV_([^&]+)')
             if ($devPartMatch.Success) {
@@ -194,21 +222,16 @@ class SmartDataComparer {
 
     [array] CompareSmartData() {
         try {
-            Import-Module "$this.INCLUDE_PATH\importexcel\ImportExcel.psd1" -Force
-            $SMARTexcelFilePath = Join-Path -Path $this.CONFIG_PATH -ChildPath "smart\smart_management.xlsx"
-            $this.SMART_Criteria = Import-Excel -Path $SMARTexcelFilePath -StartRow 3
-            $this.CustomerCode = $this.GetCustomerCode()
-            $this.ProjectCode = $this.GetProjectCode()
-            $PreSMARTDataFile = "$this.LOG_PATH\smart_before.csv"
-            $PostSMARTDataFile = "$this.LOG_PATH\smart_after.csv"
-            $this.SummarySMARTData = "$this.LOG_PATH\smart_summary.csv"
+            $this.SummarySMARTDataFile = "$($this.LOG_PATH)\smart_summary.csv"
+            $PreSMARTDataFile = "$($this.LOG_PATH)\smart_before.csv"
+            $PostSMARTDataFile = "$($this.LOG_PATH)\smart_after.csv"
             $this.SmartBefore = Import-Csv -Path $PreSMARTDataFile
             $this.SmartAfter = Import-Csv -Path $PostSMARTDataFile
             [int]$FailCount = 0
             [int]$WarningCount = 0
 
-            $_tmp = New-Item -Path $this.SummarySMARTData -ItemType File -Force
-            $_tmp = Add-Content -Path $this.SummarySMARTData -Value "customer,byte_offset,Before Value (HEX),After Value (HEX),field_name,result"
+            $_tmp = New-Item -Path $this.SummarySMARTDataFile -ItemType File -Force
+            $_tmp = Add-Content -Path $this.SummarySMARTDataFile -Value "customer,byte_offset,Before Value (HEX),After Value (HEX),field_name,result"
 
             $NvmeCustomerCode = switch ($this.CustomerCode) {
                 "HP" { "NVME_HP" }
@@ -236,15 +259,73 @@ class SmartDataComparer {
         catch {
             Write-Host "Error comparing SMART data: $_"
         }
-        return 0, 0
+        return -1, -1
     }
+
+    [array] GetLogPage($LogID, $LogPageSize = 512) {
+        try {
+            $AccessMask = "3221225472"; # = 0xC00000000 = GENERIC_READ (0x80000000) | GENERIC_WRITE (0x40000000)
+            $AccessMode = 3; # FILE_SHARE_READ | FILE_SHARE_WRITE
+            $AccessEx = 3; # OPEN_EXISTING
+            $AccessAttr = 0x40; # FILE_ATTRIBUTE_DEVICE
+
+            $DeviceHandle = $SCRIPT:KernelService::CreateFile("\\.\PhysicalDrive$($this.PhyDrvNo)", [System.Convert]::ToUInt32($AccessMask), $AccessMode, [System.IntPtr]::Zero, $AccessEx, $AccessAttr, [System.IntPtr]::Zero);
+            # offsetof(STORAGE_PROPERTY_QUERY, AdditionalParameters)
+            #  + sizeof(STORAGE_PROTOCOL_SPECIFIC_DATA)
+            #  + sizeof(NVME_SMART_INFO_LOG) = 560
+            $OutBufferSize = 8 + 40 + $LogPageSize; # = 560
+            $OutBuffer = [System.Runtime.InteropServices.Marshal]::AllocHGlobal($OutBufferSize);
+
+            $Property = New-Object NVMeStorageQueryProperty;
+            $Property.PropertyId = 50; # StorageDeviceProtocolSpecificProperty
+            $Property.QueryType = 0; # PropertyStandardQuery
+            $Property.ProtocolType = 3; # ProtocolTypeNvme
+            $Property.DataType = 2; # NVMeDataTypeLogPage
+
+            $Property.ProtocolDataRequestValue = $LogID; # NVME_LOG_PAGE_HEALTH_INFO
+            $Property.ProtocolDataRequestSubValue = 0; # LPOL
+            $Property.ProtocolDataRequestSubValue2 = 0; # LPOU
+            $Property.ProtocolDataRequestSubValue3 = 0; # Log Specific Identifier in CDW11
+            $Property.ProtocolDataRequestSubValue4 = 0; # Retain Asynchronous Event (RAE) and Log Specific Field (LSP) in CDW10
+
+            $Property.ProtocolDataOffset = 40; # sizeof(STORAGE_PROTOCOL_SPECIFIC_DATA)
+            $Property.ProtocolDataLength = $LogPageSize; # sizeof(NVME_SMART_INFO_LOG)
+
+            $ByteRet = 0;
+            $IoControlCode = 0x2d1400; # IOCTL_STORAGE_QUERY_PROPERTY
+
+            [System.Runtime.InteropServices.Marshal]::StructureToPtr($Property, $OutBuffer, [System.Boolean]::false);
+            $CallResult = $SCRIPT:KernelService::DeviceIoControl($DeviceHandle, $IoControlCode, $OutBuffer, $OutBufferSize, $OutBuffer, $OutBufferSize, [ref]$ByteRet, [System.IntPtr]::Zero);
+            $LogPageData = New-Object byte[] $LogPageSize
+            [System.Runtime.InteropServices.Marshal]::Copy([IntPtr]($OutBuffer.ToInt64() + 48), $LogPageData, 0, $LogPageSize)
+        }
+        catch {
+            Write-Output "`n[E] GetLogPage failed: $_";
+            Return @();
+        }
+        finally {
+            [System.Runtime.InteropServices.Marshal]::FreeHGlobal($OutBuffer);
+            [void]$SCRIPT:KernelService::CloseHandle($DeviceHandle);
+        }
+        return $LogPageData
+    }
+
+    [void] SaveSmartData($step = "before") {
+        $filePath = "$($this.LOG_PATH)\smart_$step.csv"
+        $smartData = $this.GetLogPage(2, 4096)
+        $smartData | Export-Csv -Path $filePath -NoTypeInformation
+    }
+
 }
+
 
 # Ensure $Global:TargetDeviceInfo is initialized
 $Global:TargetDeviceInfo = @{
-    NVMeInstanceId = "DEV_1234"
+    NVMeInstanceId = "DEV_1F69"
 }
 
-$comparer = [SmartDataComparer]::new()
+$comparer = [SmartDataComparer]::new(1)
+$logpagedata = $comparer.GetLogPage(2, 4096)
+
 $fail, $warning = $comparer.CompareSmartData()
 write-host "Fail: $fail, Warning: $warning"
