@@ -58,12 +58,16 @@ class SmartDataComparer {
     [string]$INCLUDE_PATH
     [string]$CONFIG_PATH
     [string]$LOG_PATH
-    [string]$SummarySMARTDataFile
-    [array]$SMART_Criteria
+    [string]$SmartFileBefore
+    [string]$SmartFileAfter
+    [string]$SmartfilePath
+    [string]$SmartFileSummary
+    [array]$SmartCriteria
     [array]$SmartBefore
     [array]$SmartAfter
     [string]$CustomerCode
     [string]$ProjectCode
+    [int]$PhyDrvNo
 
     SmartDataComparer([int]$PhyDrvNo = 0) {
         $this.PhyDrvNo = $PhyDrvNo
@@ -73,7 +77,7 @@ class SmartDataComparer {
 
         Import-Module "$($this.INCLUDE_PATH)\importexcel\ImportExcel.psd1"
         $SMARTexcelFilePath = Join-Path -Path $this.CONFIG_PATH -ChildPath "smart\smart_management.xlsx"
-        $this.SMART_Criteria = Import-Excel -Path $SMARTexcelFilePath -StartRow 3
+        $this.SmartCriteria = Import-Excel -Path $SMARTexcelFilePath -StartRow 3
         $this.GetCustomerCode()
         $this.GetProjectCode()
     }
@@ -147,7 +151,7 @@ class SmartDataComparer {
         $_SmartBefore = $this.SmartBefore | Where-Object { $_.customer -eq $CustomerPart }
         $_SmartAfter = $this.SmartAfter | Where-Object { $_.customer -eq $CustomerPart }
 
-        $this.SMART_Criteria | Where-Object { $_.customer -eq $Customer } | ForEach-Object {
+        $this.SmartCriteria | Where-Object { $_.customer -eq $Customer } | ForEach-Object {
             $byteOffset = $_.byte_offset
             $condition = $_.PSObject.Properties[$this.ProjectCode].Value  # Dynamically access the product key
             $Description = $_.field_name
@@ -164,7 +168,7 @@ class SmartDataComparer {
                 $Result = "PASS"
                 try {
                     Write-Host "$($_.customer), $byteOffset, $condition, $valueBefore <==> $valueAfter"
-                    $ret = $this.EvaluateCondition(@{valueBefore = $valueBefore; valueAfter = $valueAfter; conditions = $condition })
+                    $ret = $this.EvaluateCondition($valueBefore, $valueAfter, $condition)
                     if ($ret) {
                         $Result = $_.criteria
                         Write-Host "SMART:$Result - $Customer,$byteOffset,$Description,$condition, $valueBefore <==> $valueAfter"
@@ -178,7 +182,7 @@ class SmartDataComparer {
                     "FAIL" { $_FailCount++ }
                 }
             }
-            Add-Content -Path $this.SummarySMARTDataFile -Value "$Customer,$byteOffset,$valueHexBefore,$valueHexAfter,$Description,$Result"
+            Add-Content -Path $this.SmartFileSummary -Value "$Customer,$byteOffset,$valueHexBefore,$valueHexAfter,$Description,$Result"
         }
         return $_FailCount, $_WarningCount
     }
@@ -209,10 +213,10 @@ class SmartDataComparer {
             $devPartMatch = [regex]::Match($deviceString, 'DEV_([^&]+)')
             if ($devPartMatch.Success) {
                 $devPartValue = $devPartMatch.Groups[1].Value
-                $this.ProjectCode = $this.SMART_Criteria[0].PSObject.Properties.Name | Where-Object { $_ -like "*$devPartValue*" } | Select-Object -First 1
+                $this.ProjectCode = $this.SmartCriteria[0].PSObject.Properties.Name | Where-Object { $_ -like "*$devPartValue*" } | Select-Object -First 1
             }
             if (-not $this.ProjectCode) {
-                $this.ProjectCode = $this.SMART_Criteria[0].PSObject.Properties.Name | Where-Object { $_ -like "*PCB01*" } | Select-Object -First 1
+                $this.ProjectCode = $this.SmartCriteria[0].PSObject.Properties.Name | Where-Object { $_ -like "*PCB01*" } | Select-Object -First 1
             }
         }
         catch {
@@ -222,7 +226,7 @@ class SmartDataComparer {
 
     [array] CompareSmartData() {
         try {
-            $this.SummarySMARTDataFile = "$($this.LOG_PATH)\smart_summary.csv"
+            $this.SmartFileSummary = "$($this.LOG_PATH)\smart_summary.csv"
             $PreSMARTDataFile = "$($this.LOG_PATH)\smart_before.csv"
             $PostSMARTDataFile = "$($this.LOG_PATH)\smart_after.csv"
             $this.SmartBefore = Import-Csv -Path $PreSMARTDataFile
@@ -230,8 +234,8 @@ class SmartDataComparer {
             [int]$FailCount = 0
             [int]$WarningCount = 0
 
-            $_tmp = New-Item -Path $this.SummarySMARTDataFile -ItemType File -Force
-            $_tmp = Add-Content -Path $this.SummarySMARTDataFile -Value "customer,byte_offset,Before Value (HEX),After Value (HEX),field_name,result"
+            $_tmp = New-Item -Path $this.SmartFileSummary -ItemType File -Force
+            $_tmp = Add-Content -Path $this.SmartFileSummary -Value "customer,byte_offset,Before Value (HEX),After Value (HEX),field_name,result"
 
             $NvmeCustomerCode = switch ($this.CustomerCode) {
                 "HP" { "NVME_HP" }
@@ -310,10 +314,54 @@ class SmartDataComparer {
         return $LogPageData
     }
 
+    [string] ConvertBytesToHex([byte[]]$bytes) {
+        if ($bytes.Count -le 16) {
+            [Array]::Reverse($bytes)
+        }
+        if ($bytes.Count -gt 32) {
+            return ""
+        }
+        return ($bytes | ForEach-Object { $_.ToString("X2") }) -join '' -replace '(.{8})(?!$)', '$1 '
+    }
+
+    [void] ParseSmartData($smartData, $CustomerCode) {
+        $this.SmartCriteria | Where-Object { $_.customer -eq $CustomerCode } | ForEach-Object {
+            $byteOffset = $_.byte_offset
+            $Description = $_.field_name
+            if ($Description -eq "Reserved") {
+                $value = ""
+                $hexValue = ""
+            }
+            else {
+                $bytes = $this.GetBytes($smartData, $byteOffset)
+                $value = $this.ConvertBytesToNumber($bytes)
+                $hexValue = $this.ConvertBytesToHex($bytes)
+            }
+            Write-Host "$CustomerCode,$byteOffset,$hexValue,$value,$Description"
+            Add-Content -Path $this.SmartfilePath -Value "$CustomerCode,$byteOffset,$hexValue,$value,$Description"
+        }
+
+    }
+
     [void] SaveSmartData($step = "before") {
-        $filePath = "$($this.LOG_PATH)\smart_$step.csv"
+        if ($step -eq "before") {
+            $this.SmartFileBefore = "$($this.LOG_PATH)\smart_before.csv"
+            $this.SmartfilePath = $this.SmartFileBefore
+        }
+        else {
+            $this.SmartFileAfter = "$($this.LOG_PATH)\smart_after.csv"
+            $this.SmartfilePath = $this.SmartFileAfter
+        }
+        New-Item -Path $this.SmartfilePath -ItemType File -Force
+        Add-Content -Path $this.SmartfilePath -Value "customer,byte_offset,hex_value,value,field_name"
+
         $smartData = $this.GetLogPage(2, 4096)
-        $smartData | Export-Csv -Path $filePath -NoTypeInformation
+        $this.ParseSmartData($smartData, "NVME")
+        $this.ParseSmartData($smartData, "NVME_HP")
+        $this.ParseSmartData($smartData, "NVME_DELL")
+        $this.ParseSmartData($smartData, "NVME_GEN")
+        $this.ParseSmartData($smartData, "WAI")
+        $this.ParseSmartData($smartData, "WAF")
     }
 
 }
@@ -325,7 +373,8 @@ $Global:TargetDeviceInfo = @{
 }
 
 $comparer = [SmartDataComparer]::new(1)
-$logpagedata = $comparer.GetLogPage(2, 4096)
+$logpagedata = $comparer.SaveSmartData("before")
+$logpagedata = $comparer.SaveSmartData("after")
 
 $fail, $warning = $comparer.CompareSmartData()
 write-host "Fail: $fail, Warning: $warning"
