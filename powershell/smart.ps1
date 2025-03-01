@@ -300,10 +300,15 @@ class SmartDataComparer {
             [System.Runtime.InteropServices.Marshal]::StructureToPtr($Property, $OutBuffer, [System.Boolean]::false);
             $CallResult = $SCRIPT:KernelService::DeviceIoControl($DeviceHandle, $IoControlCode, $OutBuffer, $OutBufferSize, $OutBuffer, $OutBufferSize, [ref]$ByteRet, [System.IntPtr]::Zero);
             $LogPageData = New-Object byte[] $LogPageSize
-            [System.Runtime.InteropServices.Marshal]::Copy([IntPtr]($OutBuffer.ToInt64() + 48), $LogPageData, 0, $LogPageSize)
+            if ($CallResult) {
+                [System.Runtime.InteropServices.Marshal]::Copy([IntPtr]($OutBuffer.ToInt64() + 48), $LogPageData, 0, $LogPageSize)
+            }
+            else {
+                Write-Host "Can't get Logpage data for $CustomerCode ($LogID)";
+            }
         }
         catch {
-            Write-Output "`n[E] GetLogPage failed: $_";
+            Write-Host "`n[E] GetLogPage failed: $_";
             Return @();
         }
         finally {
