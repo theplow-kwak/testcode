@@ -35,7 +35,7 @@ void print_hex_dump(const std::vector<T>& data) {
     const uint8_t* byte_data = reinterpret_cast<const uint8_t*>(data.data());
 
     // Print header
-    std::cout << "     ";
+    std::cout << "      ";
     for (size_t i = 0; i < bytes_per_row; i += byte_size) {
         std::cout << std::setw(byte_size * 2) << std::setfill(' ') << std::hex << i << " ";
     }
@@ -61,17 +61,23 @@ void print_hex_dump(const std::vector<T>& data) {
     }
 }
 
-int main()
+int main(int argc, char* argv[])
 {
-    std::ifstream file("vc140.pdb", std::ios::binary);
+    if (argc < 2)
+    {
+        std::cerr << "Usage: " << argv[0] << " <filename>" << std::endl;
+        return 1;
+    }
+
+    std::ifstream file(argv[1], std::ios::binary);
     if (!file)
     {
-        std::cerr << "Unable to open file" << std::endl;
+        std::cerr << "Unable to open file: " << argv[1] << std::endl;
         return 1;
     }
 
     // 시작 위치와 길이를 지정
-    std::streampos start_pos = 0x10000;
+    std::streampos start_pos = 0;
     std::streamsize length = 512; // 예시로 128바이트를 읽음
 
     // 파일의 시작 위치로 이동
