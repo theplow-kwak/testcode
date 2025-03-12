@@ -13,10 +13,10 @@ if not os.path.exists(mp4_file):
 
 
 clip = VideoFileClip(mp4_file)
-
 louder_clip = clip.audio.audio_normalize().volumex(10)
 
 print(f"FPS: {clip.fps}, channels: {clip.audio.nchannels}, maxvol: {clip.audio.max_volume()}, louder_maxvol: {louder_clip.max_volume()}")
 
+new_name = os.path.splitext(mp4_file)[0] + ".mp3"
 # clip.audio.write_audiofile("output_audio.mp3", 22050, ffmpeg_params=["-ac", "1"])
-louder_clip.write_audiofile("louder_audio.mp3", 22050, ffmpeg_params=["-ac", "1"])
+louder_clip.write_audiofile(new_name, 22050, ffmpeg_params=["-ac", "1"])
