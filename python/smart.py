@@ -4,258 +4,318 @@ import csv
 import re
 from openpyxl import load_workbook
 import logging
-import winreg
 
 # 로깅 설정
 logging.basicConfig(filename="smart_data.log", level=logging.INFO)
 
 # 상수 변수 설정
-MODULE_PATH = "path/to/module"
-DATA_PATH = "path/to/data"
-LOG_PATH = "path/to/log"
+CURRENT_PATH = os.path.dirname(os.path.abspath(__file__))
+CONFIG_PATH = CURRENT_PATH
+DATA_PATH = f"{CURRENT_PATH}/data"
+LOG_PATH = f"{CURRENT_PATH}/logs"
 LOG_ERROR = logging.ERROR
 LOG_INFO = logging.INFO
 
 
-def get_reg_internal_firmware_revision():
-    try:
-        # 레지스트리 키 열기
-        key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Your\Registry\Path")
-        # 값을 읽기
-        value, _ = winreg.QueryValueEx(key, "InternalFirmwareRevision")
-        winreg.CloseKey(key)
-        return value
-    except Exception as e:
-        logging.error(f"Error reading registry: {e}")
+class nvme_common:
+    def __init__(self, hostRoot, ostype="Linux"):
+        self.status = {}  # Dictionary that keeps status such as fna,nsze
+        self.hostRoot = hostRoot if hostRoot else self
+        self.ostype = ostype
+
+    def VmExec(self, cmd, ignoreError=False):
+        try:
+            result = subprocess.run(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            if result.returncode != 0:
+                if ignoreError:
+                    logging.warning(f"Command failed but ignored. Error: {result.stderr.strip()}")
+                else:
+                    logging.error(f"Command failed. Error: {result.stderr}")
+                    raise subprocess.CalledProcessError(result.returncode, cmd, result.stdout, result.stderr)
+                return result.stderr
+            else:
+                logging.info(f"Command executed successfully. Output: {result.stdout}")
+                return result.stdout
+        except subprocess.CalledProcessError as e:
+            logging.error(f"An error occurred while executing the command: {e.stderr}")
+            if not ignoreError:
+                raise e
+            return result.stdout
+
+    def run(self, target_dev, opt_main, opt_sub="", ignoreError=False):
+        cmd = f"sudo nvme {opt_main.strip()} {target_dev.strip()} {opt_sub.strip()}"
+        logging.info(f"Running command: {cmd}")
+        return self.VmExec(cmd, ignoreError)
+
+    def get_log(self, target_dev, log_id, namespace="", length=""):
+        opt_main = "get-log"
+        opt_sub = f"-i {log_id} -l {length}"
+        if namespace:
+            opt_sub += f" -n {namespace}"
+        return self.run(target_dev, opt_main, opt_sub, ignoreError=True)
+
+    def get_device_id(self, device):
+        device_id_match = re.search(r"nvme\d+", device)
+        if device_id_match:
+            device = device_id_match.group()
+            return self.hostRoot.VmExec(f"cat /sys/class/nvme/{device}/device/device")
         return None
 
+    def get_fw_version(self, target_dev):
+        opt_main = "specific get-fw-rev"
+        opt_sub = ""
+        return self.run(target_dev, opt_main, opt_sub, ignoreError=True)
 
-def backup_smart_data(physical_drv_num=0, step="Before"):
-    try:
-        result = subprocess.run(
-            [f"{MODULE_PATH}/smart.exe", "-s", str(physical_drv_num)],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        smart_files = [f for f in os.listdir(DATA_PATH) if f.startswith("smart") and f.endswith(".txt")]
-        smart_data_path = os.path.join(DATA_PATH, smart_files[-1])
 
-        logging.info(f"copy {os.path.basename(smart_data_path)} to Stat_SMARTExtension_{step}.csv")
-        destination = os.path.join(LOG_PATH, f"Stat_SMARTExtension_{step}.csv")
-        os.system(f"cp {smart_data_path} {destination}")
+class ExcelData:
+    def __init__(self, path, start_row=1):
+        self.path = path
+        self.start_row = start_row
+        self.data = self.read_excel_data()
 
-        return True
-    except subprocess.CalledProcessError as e:
-        logging.error(f"smart.exe returns error: {e.returncode}")
+    def read_excel_data(self):
+        workbook = load_workbook(self.path)
+        sheet = workbook.active
+        headers = [cell.value for cell in sheet[self.start_row]]
+        data = []
+        for row in sheet.iter_rows(min_row=self.start_row + 1, values_only=True):
+            if not row[0]:
+                break
+            item = {headers[i]: value for i, value in enumerate(row)}
+            data.append(item)
+        workbook.close()
+        return data
+
+
+class SmartData:
+    def __init__(self, hostRoot, ostype="Linux", target_device=None):
+        self.smart_before_fname = os.path.join(LOG_PATH, "Stat_SMARTExtension_Before.csv")
+        self.smart_after_fname = os.path.join(LOG_PATH, "Stat_SMARTExtension_After.csv")
+        self.smart_summary_fname = os.path.join(LOG_PATH, "Stat_SMARTExtension_Summary.csv")
+        config_file = os.path.join(CONFIG_PATH, "smart", "SMART_Version_Management.xlsx")
+        self.smart_criteria = ExcelData(config_file, 3).data
+        self.hostRoot = hostRoot
+        self.fail_count = 0
+        self.warning_count = 0
+        self.nvme = nvme_common(self.hostRoot, "Linux")
+        if target_device:
+            self.target_device = target_device
+
+    def read_csv(self, file_path):
+        with open(file_path, mode="r", newline="", encoding="utf-8") as file:
+            return list(csv.DictReader(file))
+
+    def get_customer_code(self):
+        internal_firmware_revision = self.get_internal_firmware_revision()
+        if len(internal_firmware_revision) == 8:
+            customer_code = {"H": "HP", "M": "MS", "3": "LENOVO", "D": "DELL", "5": "ASUS", "K": "FACEBOOK"}.get(internal_firmware_revision[4], "UNKNOWN")
+            return customer_code
+        return "UNKNOWN"
+
+    def get_internal_firmware_revision(self):
+        fw_version = self.nvme.get_fw_version(self.target_device)
+        fw_version_match = re.search(r"Internal Firmware Revision: ([A-Za-z0-9]+)", fw_version)
+        if fw_version_match:
+            return fw_version_match.group(1)
+        return ""
+
+    def get_project_code(self):
+        device_string = self.nvme.get_device_id(self.target_device)
+        dev_part_match = re.search(r"0x([^&]+)", device_string)
+        if dev_part_match:
+            dev_part_value = dev_part_match.group(1)
+            project_code = next((key for key in self.smart_criteria[0].keys() if dev_part_value in key), None)
+        if not project_code:
+            project_code = next((key for key in self.smart_criteria[0].keys() if "SSD01" in key), None)
+        return project_code
+
+    def evaluate_condition(self, value_before, value_after, conditions):
+        for condition in conditions.split(";"):
+            if match := re.match(r"^(\w+):(\d+)$", condition):
+                operator = match.group(1)
+                threshold = float(match.group(2))
+                if (
+                    (operator == "gt" and (value_before > threshold or value_after > threshold))
+                    or (operator == "lt" and (value_before < threshold or value_after < threshold))
+                    or (operator == "ge" and (value_before >= threshold or value_after >= threshold))
+                    or (operator == "le" and (value_before <= threshold or value_after <= threshold))
+                    or (operator == "ne" and (value_before != threshold or value_after != threshold))
+                    or (operator == "eq" and (value_before == threshold or value_after == threshold))
+                ):
+                    return True
+            else:
+                if condition == "inc" and value_after > value_before:
+                    return True
+                elif condition == "dec" and value_after < value_before:
+                    return True
+                elif condition == "ne" and value_after != value_before:
+                    return True
         return False
 
+    def compare_smart_customer(self, customer_code, project_code):
+        smart_before = [item for item in self.smart_before if item["customer"] == customer_code]
+        smart_after = [item for item in self.smart_after if item["customer"] == customer_code]
 
-def evaluate_condition(value_before, value_after, conditions):
-    for condition in conditions.split(";"):
-        if match := re.match(r"^(\w+):(\d+)$", condition):
-            operator, threshold = match.groups()
-            threshold = float(threshold)
-            if (
-                (operator == "gt" and value_after > threshold)
-                or (operator == "lt" and value_after < threshold)
-                or (operator == "ge" and value_after >= threshold)
-                or (operator == "le" and value_after <= threshold)
-                or (operator == "ne" and value_after != threshold)
-                or (operator == "eq" and value_after == threshold)
-            ):
-                return True
-        else:
-            if (condition == "inc" and value_after > value_before) or (condition == "dec" and value_after < value_before) or (condition == "ne" and value_after != value_before):
-                return True
-    return False
-
-
-def get_bytes(data, byte_offset):
-    if match := re.match(r"^(\d+):(\d+)$", byte_offset):
-        end, start = map(int, match.groups())
-        length = end - start + 1
-        bytes_ = data[start : start + length]
-    elif match := re.match(r"^(\d+)$", byte_offset):
-        start = int(match.group(1))
-        bytes_ = data[start : start + 1]
-    else:
-        raise ValueError(f"Invalid byteOffset format: {byte_offset}")
-    return bytes_
-
-
-def convert_bytes_to_number(bytes_):
-    if len(bytes_) == 1:
-        return int.from_bytes(bytes_ + b"\x00", byteorder="little")
-    elif len(bytes_) in (2, 4, 8, 16):
-        return int.from_bytes(bytes_, byteorder="little")
-    else:
-        padded_bytes = bytes_ + b"\x00" * (8 - len(bytes_))[:8]
-        return int.from_bytes(padded_bytes, byteorder="little")
-
-
-def compare_smart_data(customer, project_code, smart_before, smart_after, smart_criteria, summary_file):
-    fail_count = 0
-    warning_count = 0
-
-    smart_before_filtered = [item for item in smart_before if item["customer"] == customer.split("_")[0]]
-    smart_after_filtered = [item for item in smart_after if item["customer"] == customer.split("_")[0]]
-
-    for criteria in smart_criteria:
-        if criteria["customer"] == customer:
+        for criteria in filter(lambda x: x["customer"] == customer_code, self.smart_criteria):
             byte_offset = criteria["byte_offset"]
-            condition = criteria[project_code]
             description = criteria["field_name"]
-            value_before_obj = next(
-                (item for item in smart_before_filtered if item["byte_offset"] == byte_offset),
-                None,
-            )
-            value_before = float(value_before_obj["value"]) if value_before_obj else None
-            value_hex_before = value_before_obj["hex_value"] if value_before_obj else None
-            value_after_obj = next(
-                (item for item in smart_after_filtered if item["byte_offset"] == byte_offset),
-                None,
-            )
-            value_after = float(value_after_obj["value"]) if value_after_obj else None
-            value_hex_after = value_after_obj["hex_value"] if value_after_obj else None
-            result = "Not a comparison item"
+            condition = criteria.get(project_code, "")
+            value_before_obj = next((item for item in smart_before if item["byte_offset"] == byte_offset), None)
+            value_after_obj = next((item for item in smart_after if item["byte_offset"] == byte_offset), None)
+            result = "Not Evaluated"
 
             if condition:
-                result = "PASS"
-                try:
-                    print(f"{criteria['customer']}, {byte_offset}, {condition}, {value_before} <==> {value_after}")
-                    ret = evaluate_condition(value_before, value_after, condition)
-                    if ret:
-                        result = criteria["criteria"]
-                        logging.info(f"SMART:{result} - {customer},{byte_offset},{description},{condition}, {value_before} <==> {value_after}")
-                except Exception as e:
-                    logging.error(f"SMART: Error processing {customer} byteOffset {byte_offset} : {e}")
+                value_before = float(value_before_obj["value"]) if value_before_obj else 0.0
+                value_after = float(value_after_obj["value"]) if value_after_obj else 0.0
+                result = criteria["criteria"] if self.evaluate_condition(value_before, value_after, condition) else "PASS"
                 if result.upper().strip() == "WARNING":
-                    warning_count += 1
+                    self.warning_count += 1
+                    logging.warning(f"SMART:WARNING - {customer_code},{byte_offset},{description},{condition}: {value_before} <==> {value_after}")
                 elif result.upper().strip() == "FAIL":
-                    fail_count += 1
-            with open(summary_file, "a", newline="") as f:
-                writer = csv.writer(f)
-                writer.writerow(
-                    [
-                        customer,
-                        byte_offset,
-                        value_hex_before,
-                        value_hex_after,
-                        description,
-                        result,
-                    ]
-                )
-    return fail_count, warning_count
+                    self.fail_count += 1
+                    logging.error(f"SMART:FAIL - {customer_code},{byte_offset},{description},{condition}: {value_before} <==> {value_after}")
+            if value_before_obj and value_after_obj:
+                self.csv_writer.writerow([customer_code, byte_offset, value_before_obj["hex_value"], value_after_obj["hex_value"], description, result])
+            else:
+                self.csv_writer.writerow([customer_code, byte_offset, "", "", description, result])
 
+    def compare_smart_data(self):
+        self.smart_before = self.read_csv(self.smart_before_fname)
+        if not os.path.isfile(self.smart_after_fname):
+            self.save_smart_data(step="after")
+        self.smart_after = self.read_csv(self.smart_after_fname)
+        summary_file = open(self.smart_summary_fname, "w")
+        self.csv_writer = csv.writer(summary_file)
+        self.csv_writer.writerow(["customer", "byte_offset", "Before Value (HEX)", "After Value (HEX)", "field_name", "result"])
 
-def get_customer_code():
-    internal_firmware_revision = get_reg_internal_firmware_revision()
-    if len(internal_firmware_revision) == 8:
-        customer_code_map = {
-            "H": "HP",
-            "M": "MS",
-            "3": "LENOVO",
-            "D": "DELL",
-            "5": "ASUS",
-            "K": "FACEBOOK",
-        }
-        customer_code = customer_code_map.get(internal_firmware_revision[4], "UNKNOWN")
-        return customer_code
-    return "UNKNOWN"
+        customer_code = self.get_customer_code()
+        project_code = self.get_project_code()
+        nvme_customer_code = {"HP": "NVME_HP", "DELL": "NVME_DELL"}.get(customer_code, "NVME_GEN")
 
+        self.compare_smart_customer("NVME", project_code)
+        self.compare_smart_customer(nvme_customer_code, project_code)
+        self.compare_smart_customer(customer_code, project_code)
+        self.compare_smart_customer("WAI", project_code)
+        self.compare_smart_customer("WAF", project_code)
 
-def get_project_code(target_device_info):
-    project_code = None
-    device_string = target_device_info["NVMeInstanceId"]
-    if match := re.search(r"DEV_([^&]+)", device_string):
-        dev_part_value = match.group(1)
-        project_code = next((key for key in smart_criteria[0] if dev_part_value in key), None)
-    if not project_code:
-        project_code = next((key for key in smart_criteria[0] if "PCB01" in key), None)
-    return project_code
+        summary_file.close()
+        if self.fail_count > 0:
+            logging.error(f"[SMART][{customer_code}][{project_code}] Test Failed - Warning: {self.warning_count}, Fail: {self.fail_count}")
+            return False
+        else:
+            logging.info(f"[SMART][{customer_code}][{project_code}] Test Passed - Warning: {self.warning_count}, Fail: {self.fail_count}")
+            return True
 
+    def get_bytes(self, data, byte_offset):
+        if match := re.match(r"^(\d+):(\d+)$", byte_offset):
+            end = int(match.group(1))
+            start = int(match.group(2))
+            return data[start : end + 1]
+        elif match := re.match(r"^(\d+)$", byte_offset):
+            start = int(match.group(1))
+            return [data[start]]
+        else:
+            raise ValueError(f"Invalid byteOffset format: {byte_offset}")
 
-def compare_smart_attribute_values(config_path, log_path):
-    global smart_criteria, smart_before, smart_after, summary_smart_data
+    def bytes_to_number(self, bytes_data):
+        if not bytes_data:
+            return 0
+        bytes_data = bytes.fromhex("".join(bytes_data))
+        return int.from_bytes(bytes_data, byteorder="little")
 
-    smart_excel_file_path = os.path.join(config_path, "smart", "SMART_Version_Management.xlsx")
-    workbook = load_workbook(smart_excel_file_path)
-    sheet = workbook.active
-    smart_criteria = [dict(zip([cell.value for cell in sheet[2]], [cell.value for cell in row])) for row in sheet.iter_rows(min_row=3, values_only=True)]
+    def bytes_to_hex_string(self, bytes_data):
+        hex_string = []
+        size = len(bytes_data)
+        if size > 40:
+            return ""
+        if size in [2, 4, 8, 16]:
+            bytes_data = bytes_data[::-1]  # Reverse the byte order for little-endian representation
+        for i in range(size):
+            hex_string.append(f"{bytes_data[i]}")
+        return re.sub(r"(.{8})(?!$)", r"\1 ", "".join(hex_string)).upper()
 
-    customer_code = get_customer_code()
-    target_device_info = {}  # This should be populated with actual NVMeInstanceId data
-    project_code = get_project_code(target_device_info)
+    def bytes_to_decimal_string(self, bytes_data):
+        decimal = "0"
+        for byte in reversed(bytes_data):
+            carry = int(byte, base=16)
+            for i in range(len(decimal) - 1, -1, -1):
+                num = (ord(decimal[i]) - ord("0")) * 256 + carry
+                decimal = decimal[:i] + chr(ord("0") + num % 10) + decimal[i + 1 :]
+                carry = num // 10
+            while carry > 0:
+                decimal = chr(ord("0") + carry % 10) + decimal
+                carry //= 10
+        return decimal
 
-    pre_smart_data_file = os.path.join(log_path, "Stat_SMARTExtension_Before.csv")
-    post_smart_data_file = os.path.join(log_path, "Stat_SMARTExtension_After.csv")
-    summary_smart_data = os.path.join(log_path, "Stat_SMARTExtension_Summary.csv")
+    def get_log_page(self, customer_code):
+        log_id, log_length = {
+            "SSS": ["0xFE", 8192],
+            "HP": ["0xC7", 512],
+            "MS": ["0xC0", 512],
+            "LENOVO": ["0xDF", 512],
+            "DELL": ["0xCA", 512],
+        }.get(customer_code, ["0x02", 512])
 
-    smart_before = list(csv.DictReader(open(pre_smart_data_file)))
-    smart_after = list(csv.DictReader(open(post_smart_data_file)))
+        raw_data = self.nvme.get_log(self.target_device, log_id=log_id, length=log_length)
+        if re.match(r"NVMe status: Invalid", raw_data, re.IGNORECASE):
+            logging.info(f"Can't get SMART log for {customer_code}({log_id})\n")
+            smart_data = ["00"] * log_length
+        else:
+            smart_data = []
+            for line in raw_data.split("\n")[2:]:
+                smart_data.extend(line.split(" ")[1:-1])
+        return smart_data
 
-    with open(summary_smart_data, "w", newline="") as f:
-        writer = csv.writer(f)
-        writer.writerow(
-            [
-                "customer",
-                "byte_offset",
-                "Before Value (HEX)",
-                "After Value (HEX)",
-                "field_name",
-                "result",
-            ]
-        )
+    def parse_smart_data(self, smart_data, customer_code):
+        for template in filter(lambda x: x["customer"] == customer_code, self.smart_criteria):
+            byte_offset = template["byte_offset"]
+            field_name = template["field_name"]
+            bytes_data = self.get_bytes(smart_data, byte_offset)
+            if field_name == "Reserved":
+                value = ""
+                hex_value = ""
+            else:
+                hex_value = self.bytes_to_hex_string(bytes_data)
+                value = self.bytes_to_decimal_string(bytes_data)
+            self.csv_writer.writerow([customer_code, byte_offset, hex_value, value, field_name])
 
-    fail_count, warning_count = compare_smart_data(
-        "NVME",
-        project_code,
-        smart_before,
-        smart_after,
-        smart_criteria,
-        summary_smart_data,
-    )
-    nvme_customer_code = {"HP": "NVME_HP", "DELL": "NVME_DELL"}.get(customer_code, "NVME_GEN")
-    fail_count, warning_count = compare_smart_data(
-        nvme_customer_code,
-        project_code,
-        smart_before,
-        smart_after,
-        smart_criteria,
-        summary_smart_data,
-    )
-    fail_count, warning_count = compare_smart_data(
-        customer_code,
-        project_code,
-        smart_before,
-        smart_after,
-        smart_criteria,
-        summary_smart_data,
-    )
-    fail_count, warning_count = compare_smart_data(
-        "WAI",
-        project_code,
-        smart_before,
-        smart_after,
-        smart_criteria,
-        summary_smart_data,
-    )
-    fail_count, warning_count = compare_smart_data(
-        "WAF",
-        project_code,
-        smart_before,
-        smart_after,
-        smart_criteria,
-        summary_smart_data,
-    )
+    def get_wai_waf(self, smart_data):
+        ec_slc_total = self.bytes_to_number(self.get_bytes(smart_data, "227:224"))
+        ec_tlc_total = self.bytes_to_number(self.get_bytes(smart_data, "243:240"))
+        written_to_slc_user = self.bytes_to_number(self.get_bytes(smart_data, "127:120"))
+        written_to_tlc_user = self.bytes_to_number(self.get_bytes(smart_data, "119:112"))
+        write_from_host = self.bytes_to_number(self.get_bytes(smart_data, "111:104"))
+        host_writes = write_from_host or 1  # Prevent division by zero
+        wai = (written_to_slc_user + written_to_tlc_user) / host_writes
+        waf = (ec_slc_total + ec_tlc_total) / host_writes
+        return wai, waf
 
-    logging.info(f"[SMART][{customer_code}][{project_code}] Warning: {warning_count}, Fail: {fail_count}")
-    return fail_count, warning_count
+    def save_smart_data(self, step="before"):
+        if self.target_device is None:
+            logging.info("Target device not specified")
+            return
+        filename = self.smart_before_fname if step == "before" else self.smart_after_fname
+        with open(filename, "w", newline="") as smart_file:
+            self.csv_writer = csv.writer(smart_file)
+            self.csv_writer.writerow(["customer", "byte_offset", "hex_value", "value", "field_name"])
+
+            nvme_customer_code = {"HP": "NVME_HP", "DELL": "NVME_DELL"}.get(self.get_customer_code(), "NVME_GEN")
+            smart_data = self.get_log_page("NVME")
+            self.parse_smart_data(smart_data, "NVME")
+            self.parse_smart_data(smart_data, nvme_customer_code)
+
+            customer_codes = ["HP", "MS", "LENOVO", "DELL", "SKH"]
+            for code in customer_codes:
+                smart_data = self.get_log_page(code)
+                self.parse_smart_data(smart_data, code)
+
+            wai, waf = self.get_wai_waf(smart_data[512:])
+            self.csv_writer.writerow(["WAI", "000", f"{wai:.6f}", f"{wai:.6f}", "[ETC] (ec_slc_total + ec_tlc_total) / write_from_host"])
+            self.csv_writer.writerow(["WAF", "000", f"{waf:.6f}", f"{waf:.6f}", "[ETC] (written_to_tlc_user + written_to_slc_buf) / write_from_host"])
 
 
 # 사용 예시
 if __name__ == "__main__":
-    config_path = "path/to/config"
-    log_path = "path/to/log"
-    compare_smart_attribute_values(config_path, log_path)
+    smart_comparer = SmartData("", target_device="/dev/nvme0")
+    smart_comparer.save_smart_data()
+    smart_comparer.compare_smart_data()
