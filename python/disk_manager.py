@@ -16,9 +16,11 @@ class CommandRunner:
         self.ignore_error = ignore_error
         self.return_stdout = return_stdout
         self.background = background
+        self.sudo_cmd = "sudo " if os.geteuid() != 0 else ""
 
     def run_command(self, cmd: str, ignore_error=None) -> Optional[str]:
         """Run a shell command and handle errors."""
+        cmd = f"{self.sudo_cmd}{cmd}"
         ignore_error = ignore_error or self.ignore_error
         try:
             logging.debug(f"Executing command: {cmd}")
@@ -150,9 +152,6 @@ class DiskManager:
         if mounted_partitions:
             for warning in mounted_partitions:
                 logging.warning(warning)
-            if force:
-                logging.warning("Force mode enabled. Proceeding despite mounted partitions.")
-                return False
         return bool(mounted_partitions)
 
     def create_partition_table(self, table_type: str, force: bool = False):
@@ -215,7 +214,7 @@ class DiskManager:
                     name = entry.get("NAME", "")
                     mountpoint = entry.get("MOUNTPOINT", "")
                     if name.startswith(os.path.basename(self.disk)) and mountpoint:
-                        self.unmount_partition(f"/dev/{name}")
+                        self.unmount_partition(mountpoint)
             else:
                 logging.error(f"Cannot delete partitions on {self.disk} because some partitions are mounted.")
                 return
@@ -241,7 +240,7 @@ class DiskManager:
                     return
         cmd = {
             "ext4": f"mkfs.ext4 {'-b ' + str(block_size) if block_size else ''} {partition}",
-            "xfs": f"mkfs.xfs {'-b size=' + str(block_size) if block_size else ''} {partition}",
+            "xfs": f"mkfs.xfs {'-b size=' + str(block_size) if block_size else ''} {'-f' if force else ''} {partition}",
         }.get(fstype)
         if not cmd:
             raise ValueError("Unsupported filesystem type")
@@ -282,9 +281,9 @@ class DiskManager:
 
 def main():
     parser = argparse.ArgumentParser(description="Disk Partition Manager")
+    parser.add_argument("commands", nargs="+", help="Actions to perform: wipe, create, format, mount, unmount")
     parser.add_argument("--disk", help="Target disk (e.g., /dev/sdb or nvme0)")
     parser.add_argument("--tool", choices=["parted", "fdisk"], default="parted")
-    parser.add_argument("--commands", nargs="+", help="Actions to perform: wipe, create, format, mount, unmount")
     parser.add_argument("--table", choices=["gpt", "msdos"], help="Partition table type")
     parser.add_argument("--partitions", help="JSON list of partitions with start/end/type")
     parser.add_argument("--fstype", choices=["ext4", "xfs"], help="Filesystem type")
@@ -304,6 +303,21 @@ def main():
         manager = DiskManager(args.disk, args.tool, force=args.force)
 
         partitions = json.loads(args.partitions) if args.partitions else []
+
+        actions = {
+            "wipe": lambda: manager.delete_all_partitions(force=args.force),
+            "create": lambda: (
+                manager.create_partition_table(args.table, force=args.force) if args.table else None,
+                manager.create_partitions(partitions, force=args.force) if partitions else None,
+            ),
+            "format": lambda: (
+                [manager.format_partition(get_partition_name(manager.disk, idx), args.fstype, args.blocksize, force=args.force) for idx, _ in enumerate(partitions)]
+                if args.fstype
+                else ValueError("Filesystem type must be specified for format")
+            ),
+            "mount": lambda: [manager.mount_partition(get_partition_name(manager.disk, idx), f"/mnt/partition{idx+1}") for idx, _ in enumerate(partitions)],
+            "unmount": lambda: [manager.unmount_partition(get_partition_name(manager.disk, idx)) for idx, _ in enumerate(partitions)],
+        }
 
         for cmd in args.commands or []:
             if cmd == "wipe" or args.wipe:
