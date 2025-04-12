@@ -10,7 +10,15 @@
             "request": "launch",
             "program": "${file}",
             "console": "integratedTerminal",
-            "args": ["--disk", "/dev/nvme0n1", "-m", "/home/test/temp"],
+            "args": [
+                "mount", // "wipe", "create", "format", "unmount", 
+                "--disk", "nvme0n1",
+                // "--tool", "parted",
+                // "--table", "gpt",
+                // "--partitions", "[{\"start\": \"1MiB\", \"end\": \"512MiB\"}, {\"start\": \"512MiB\", \"end\": \"100%\"}]",
+                // "--fstype", "ext4",
+                // "--force"
+            ],
         }
     ]
 }
