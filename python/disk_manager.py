@@ -268,6 +268,38 @@ class DiskManager:
         except Exception as e:
             logging.error(f"Failed to unmount {partition}: {e}")
 
+    def delete_partition(self, partition: str, force: bool = False):
+        """
+        Delete a specific partition on the disk.
+        :param partition: The partition to delete (e.g., /dev/sdb1).
+        :param force: If True, unmount the partition if it is mounted before deleting.
+        """
+        mount_info = self.get_mount_info(refresh=True)
+        for entry in mount_info:
+            name = entry.get("NAME", "")
+            mountpoint = entry.get("MOUNTPOINT", "")
+            if f"/dev/{name}" == partition and mountpoint:
+                if force:
+                    logging.warning(f"{partition} is mounted at {mountpoint}. Force mode enabled. Attempting to unmount.")
+                    self.unmount_partition(partition)
+                else:
+                    logging.error(f"Cannot delete {partition} because it is mounted at {mountpoint}.")
+                    return
+
+        try:
+            if self.tool == "parted":
+                partition_name = os.path.basename(partition)
+                logging.info(f"Deleting partition {partition_name} using parted.")
+                self.cmd_runner.run_command(f"parted -s {self.disk} rm {partition_name[-1]}")
+            elif self.tool == "fdisk":
+                logging.info(f"Deleting partition {partition} using fdisk.")
+                script = f"d\n{partition[-1]}\nw\n"
+                self.cmd_runner.run_command(f"printf '{script}' | fdisk {self.disk}")
+            self.refresh_lsblk_info(refresh_partition=True)
+            logging.info(f"Successfully deleted partition {partition}")
+        except Exception as e:
+            logging.error(f"Failed to delete partition {partition}: {e}")
+
     def get_partition_info(self, refresh: bool = False) -> Dict[str, Dict[str, str]]:
         """
         Get partition information for the disk.
@@ -278,10 +310,23 @@ class DiskManager:
             self.refresh_lsblk_info(refresh_partition=True)
         return self.partition_info
 
+    def get_partition_by_index(self, index: int, refresh: bool = False) -> Optional[Dict[str, str]]:
+        """
+        Get information about a specific partition by its index.
+        :param index: The index of the partition (0-based).
+        :param refresh: If True, refresh the partition information before retrieving it.
+        :return: A dictionary containing information about the specified partition, or None if not found.
+        """
+        if refresh:
+            self.refresh_lsblk_info(refresh_partition=True)
+
+        partition_name = get_partition_name(self.disk, index)
+        return self.partition_info.get(partition_name)
+
 
 def main():
     parser = argparse.ArgumentParser(description="Disk Partition Manager")
-    parser.add_argument("commands", nargs="+", help="Actions to perform: wipe, create, format, mount, unmount")
+    parser.add_argument("commands", nargs="+", help="Actions to perform: wipe, create, format, mount, unmount, delete")
     parser.add_argument("--disk", help="Target disk (e.g., /dev/sdb or nvme0)")
     parser.add_argument("--tool", choices=["parted", "fdisk"], default="parted")
     parser.add_argument("--table", choices=["gpt", "msdos"], help="Partition table type")
@@ -315,6 +360,12 @@ def main():
                 if args.fstype
                 else ValueError("Filesystem type must be specified for format")
             ),
+            "delete": lambda: (
+                partition_index := int(input("Enter the partition index to delete (e.g., 1 for the first partition): ")) - 1,
+                part_name := get_partition_name(manager.disk, partition_index),
+                print(f"[ACTION] Deleting partition {part_name}..."),
+                manager.delete_partition(part_name, force=args.force),
+            ),
             "mount": lambda: [manager.mount_partition(get_partition_name(manager.disk, idx), f"/mnt/partition{idx+1}") for idx, _ in enumerate(partitions)],
             "unmount": lambda: [manager.unmount_partition(get_partition_name(manager.disk, idx)) for idx, _ in enumerate(partitions)],
         }
@@ -339,6 +390,12 @@ def main():
                     part_name = get_partition_name(manager.disk, idx)
                     print(f"[ACTION] Formatting {part_name} with {args.fstype}...")
                     manager.format_partition(part_name, args.fstype, args.blocksize, force=args.force)
+
+            elif cmd == "delete":
+                partition_index = int(input("Enter the partition index to delete (e.g., 1 for the first partition): ")) - 1
+                part_name = get_partition_name(manager.disk, partition_index)
+                print(f"[ACTION] Deleting partition {part_name}...")
+                manager.delete_partition(part_name, force=args.force)
 
             elif cmd == "mount":
                 for idx, _ in enumerate(partitions):
