@@ -6,9 +6,12 @@ import json
 import logging
 import time
 import threading
+import sys
 from nats.aio.client import Client as NATS
 
+# 로깅 설정
 logging.basicConfig(level=logging.INFO, format="%(levelname)s - %(message)s")
+# logging.getLogger("nats").setLevel(logging.FATAL)
 
 
 class NATSClient:
@@ -18,60 +21,56 @@ class NATSClient:
         self.loop = asyncio.new_event_loop()
         self.thread = threading.Thread(target=self._start_loop, daemon=True)
         self.heartbeat_task = None
+        self.connected_event = threading.Event()
         self.thread.start()
         self.loop.call_soon_threadsafe(self.loop.create_task, self._connect())
 
     def _start_loop(self):
-        """Run asyncio event loop in separate thread"""
         asyncio.set_event_loop(self.loop)
         self.loop.run_forever()
 
-    async def _connect(self):
-        """Connect to NATS server"""
-        await self.nc.connect(self.server_url)
-        logging.info(f"Connected to NATS server at {self.server_url}")
+    async def _error_cb(self, msg):
+        raise Exception(msg)
 
-    async def _async_request(self, subject: str, message: str, timeout: int = 10):
-        """Send asynchronous request and await response"""
-        try:
-            response = await self.nc.request(subject, message.encode(), timeout=timeout)
-            return response.data.decode()
-        except asyncio.TimeoutError:
-            logging.warning(f"Request to {subject} timed out")
-        except Exception as e:
-            logging.debug(f"No responders available for subject: {subject} ({e})")
-        return None
+    async def _connect(self, retries: int = 3, delay: int = 1):
+        for attempt in range(retries):
+            try:
+                await self.nc.connect(servers=[self.server_url], error_cb=self._error_cb, allow_reconnect=False)
+                logging.info(f"Connected to NATS server attempt {attempt + 1} at {self.server_url}")
+                self.connected_event.set()
+                return
+            except Exception as e:
+                logging.warning(f"NATS connection attempt {attempt + 1} failed: {e}")
+                await asyncio.sleep(delay)
+
+        self.connected_event.clear()
+        logging.warning("NATS connection failed.")
+
+    def is_connected(self):
+        return self.nc.is_connected
+
+    def wait_until_ready(self, timeout: int = 10):
+        self.connected_event.wait(timeout)
 
     def request(self, subject: str, message: str, timeout: int = 10):
-        """Synchronous request interface"""
+        if not self.is_connected():
+            return None
         future = asyncio.run_coroutine_threadsafe(self._async_request(subject, message, timeout), self.loop)
         return future.result()
 
     def publish(self, subject: str, message: str):
-        """Publish message"""
+        if not self.is_connected():
+            return
         self.loop.call_soon_threadsafe(asyncio.create_task, self.nc.publish(subject, message.encode()))
 
-    async def _async_subscribe(self, subject: str, callback):
-        """Set up asynchronous subscription"""
-
-        async def message_handler(msg):
-            data = msg.data.decode()
-            logging.debug(f">>> Received message on {msg.subject}: {data}")
-            if msg.reply:
-                response = callback(msg.subject, data)
-                if response:
-                    await msg.respond(response.encode())
-                    logging.debug(f"<<< Respond message on {msg.subject}: {response}")
-            await asyncio.sleep(0)
-
-        await self.nc.subscribe(subject, cb=message_handler)
-
     def subscribe(self, subject: str, callback):
-        """Synchronous subscription interface"""
+        if not self.is_connected():
+            return
         self.loop.call_soon_threadsafe(asyncio.create_task, self._async_subscribe(subject, callback))
 
     def heartbeat(self, subject: str, interval: int):
-        """Start sending heartbeat message periodically"""
+        if not self.is_connected():
+            return
 
         async def _send_heartbeat():
             try:
@@ -87,9 +86,24 @@ class NATSClient:
 
         self.loop.call_soon_threadsafe(_start_heartbeat)
 
-    def close(self):
-        """Close NATS connection and stop loop"""
+    async def _async_request(self, subject: str, message: str, timeout: int = 10):
+        try:
+            response = await self.nc.request(subject, message.encode(), timeout=timeout)
+            return response.data.decode()
+        except Exception as e:
+            logging.debug(f"Request to {subject} failed: {e}")
+            return None
 
+    async def _async_subscribe(self, subject: str, callback):
+        async def message_handler(msg):
+            response = callback(msg)
+            if response:
+                await msg.respond(response.encode())
+            await asyncio.sleep(0)
+
+        await self.nc.subscribe(subject, cb=message_handler)
+
+    def close(self):
         async def _shutdown():
             if self.heartbeat_task:
                 self.heartbeat_task.cancel()
@@ -97,8 +111,9 @@ class NATSClient:
                     await self.heartbeat_task
                 except asyncio.CancelledError:
                     pass
-            await self.nc.drain()
-            await self.nc.close()
+            if self.nc.is_connected:
+                await self.nc.drain()
+                await self.nc.close()
             self.loop.stop()
 
         self.loop.call_soon_threadsafe(asyncio.create_task, _shutdown())
@@ -106,10 +121,15 @@ class NATSClient:
         logging.debug("NATS connection closed")
 
 
-def request_handler(subject, data):
-    """Callback function to handle request message"""
-    print(f"Handling request on {subject} with data: {data}")
-    return f"Processed: {data}"
+def request_handler(msg):
+    data = msg.data.decode()
+    subject = msg.subject
+    if msg.reply:
+        print(f"Handling request on {subject} with data: {data}")
+        return f"Processed: {data}"
+    else:
+        print(f"Received published message on {subject} with data: {data}")
+        return None
 
 
 def main():
@@ -119,27 +139,27 @@ def main():
 
     nats_client = NATSClient(server_url=args.server)
 
-    # Subscribe to handle incoming requests
-    nats_client.subscribe("cero.*.*.*", request_handler)
+    nats_client.wait_until_ready(timeout=10)
+    if not nats_client.is_connected():
+        logging.warning("Initial connection failed. Continuing...")
+        nats_client.close()
 
-    # Start heartbeat
-    nats_client.heartbeat("squid.squid.system.heartbeat", 5)
-
-    time.sleep(1)
+    nats_client.subscribe("srv.*.*.*", request_handler)
+    nats_client.heartbeat("client.test.system.heartbeat", 5)
 
     step = 0
     try:
         while True:
-            # Send a request
-            subjects = ["squid.sero.dut.getTestProgressCycle", "squid.sero.dut.getTestProgressTime", "squid.sero.dut.getTestProgress"]
-            request_subject = subjects[step % len(subjects)]
+            subjects = ["client.test.dut.getTestProgressCycle", "client.test.dut.getTestProgressTime", "client.test.dut.getTestProgress"]
+            subject = subjects[step % len(subjects)]
             step += 1
-            response = nats_client.request(request_subject, "Request data")
+
+            response = nats_client.request(subject, "Request data")
             if response:
                 print(f"Main received response: {response}")
 
-            # Publish test
-            nats_client.publish("squid.sero.dut.sendTestProgressTime", "Hello from publisher!")
+            nats_client.publish("client.test.dut.sendTestProgressTime", "Hello from publisher!")
+            print("Main routine working...")
             time.sleep(2)
 
     except KeyboardInterrupt:
