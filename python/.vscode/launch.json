@@ -11,8 +11,9 @@
             "program": "${file}",
             "console": "integratedTerminal",
             "args": [
-                "mount", // "wipe", "create", "format", "unmount", 
+                "format", // "wipe", "create", "format", "unmount", 
                 "--disk", "nvme0n1",
+                "--partition", "1"
                 // "--tool", "parted",
                 // "--table", "gpt",
                 // "--partitions", "[{\"start\": \"1MiB\", \"end\": \"512MiB\"}, {\"start\": \"512MiB\", \"end\": \"100%\"}]",

@@ -1,12 +1,12 @@
-#!/usr/bin/python3
+#!/usr/bin/env python3
 
-import subprocess
 import argparse
-import os
 import json
 import logging
+import os
 import stat
-from typing import List, Dict, Optional
+import subprocess
+from typing import Dict, List, Optional
 
 logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
 

@@ -3,7 +3,7 @@
 import argparse
 import json
 import os
-from disk_manager import DiskManager
+from disk_manager import DiskManager, get_partition_name
 
 
 def main():
@@ -37,6 +37,13 @@ def main():
     p_wipe.add_argument("--disk", required=True, **common["disk"])
     p_wipe.add_argument("--force", action="store_true", help="Force operation")
 
+    p_format = subparsers.add_parser("format", help="Format a specific partition")
+    p_format.add_argument("--disk", required=True, **common["disk"])
+    p_format.add_argument("--partition", type=int, default=1, help="Partition index to format (e.g., 1 for the first partition)")
+    p_format.add_argument("--fstype", choices=["ext4", "xfs"], default="ext4", help="Filesystem type")
+    p_format.add_argument("--blocksize", type=int, default=4096, help="Block size for filesystem")
+    p_format.add_argument("--force", action="store_true", help="Force operation")
+
     args = parser.parse_args()
 
     if not args.command:
@@ -53,8 +60,12 @@ def main():
 
             if args.format and args.fstype:
                 for idx, _ in enumerate(partitions):
-                    part = manager.get_partition_name(args.disk, idx)
+                    part = get_partition_name(args.disk, idx)
                     manager.format_partition(part, args.fstype, args.blocksize, force=args.force)
+
+        elif args.command == "format":
+            part = get_partition_name(args.disk, args.partition - 1)
+            manager.format_partition(part, args.fstype, args.blocksize, force=args.force)
 
         elif args.command in {"mount", "unmount"}:
             info = manager.get_partition_info(refresh=True)
