@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 import os
 import subprocess
 import csv
@@ -6,7 +8,7 @@ from openpyxl import load_workbook
 import logging
 
 # 로깅 설정
-logging.basicConfig(filename="smart_data.log", level=logging.INFO)
+logging.basicConfig(level=logging.INFO)
 
 # 상수 변수 설정
 CURRENT_PATH = os.path.dirname(os.path.abspath(__file__))
@@ -17,35 +19,33 @@ LOG_ERROR = logging.ERROR
 LOG_INFO = logging.INFO
 
 
-class nvme_common:
-    def __init__(self, hostRoot, ostype="Linux"):
-        self.status = {}  # Dictionary that keeps status such as fna,nsze
-        self.hostRoot = hostRoot if hostRoot else self
-        self.ostype = ostype
-
-    def VmExec(self, cmd, ignoreError=False):
+class CommandRunner:
+    def VmExec(self, cmd: str, ignoreError: bool = True) -> str:
         try:
-            result = subprocess.run(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            logging.info(f"Running command: {cmd}")
+            result = subprocess.run(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, check=not ignoreError)
             if result.returncode != 0:
-                if ignoreError:
-                    logging.warning(f"Command failed but ignored. Error: {result.stderr.strip()}")
-                else:
-                    logging.error(f"Command failed. Error: {result.stderr}")
-                    raise subprocess.CalledProcessError(result.returncode, cmd, result.stdout, result.stderr)
-                return result.stderr
+                logging.warning(f"Command failed but ignored. Error: {result.stdout.strip()}")
             else:
-                logging.info(f"Command executed successfully. Output: {result.stdout}")
-                return result.stdout
+                logging.info(f"Command executed successfully. Output: {result.stdout.strip()}")
+            return result.stdout.strip()
         except subprocess.CalledProcessError as e:
             logging.error(f"An error occurred while executing the command: {e.stderr}")
             if not ignoreError:
                 raise e
-            return result.stdout
+        return ""
+
+
+class nvme_common:
+    def __init__(self, hostRoot, ostype="Linux"):
+        self.status = {}  # Dictionary that keeps status such as fna,nsze
+        self.hostRoot = hostRoot if hostRoot else CommandRunner()
+        self.ostype = ostype
 
     def run(self, target_dev, opt_main, opt_sub="", ignoreError=False):
-        cmd = f"sudo nvme {opt_main.strip()} {target_dev.strip()} {opt_sub.strip()}"
-        logging.info(f"Running command: {cmd}")
-        return self.VmExec(cmd, ignoreError)
+        sudo = "" if os.geteuid() == 0 else "sudo "
+        cmd = f"{sudo}nvme {opt_main.strip()} {target_dev.strip()} {opt_sub.strip()}"
+        return self.hostRoot.VmExec(cmd, ignoreError)
 
     def get_log(self, target_dev, log_id, namespace="", length=""):
         opt_main = "get-log"
@@ -62,7 +62,7 @@ class nvme_common:
         return None
 
     def get_fw_version(self, target_dev):
-        opt_main = "specific get-fw-rev"
+        opt_main = "ocp get-fw-rev"
         opt_sub = ""
         return self.run(target_dev, opt_main, opt_sub, ignoreError=True)
 
@@ -121,12 +121,12 @@ class SmartData:
 
     def get_project_code(self):
         device_string = self.nvme.get_device_id(self.target_device)
-        dev_part_match = re.search(r"0x([^&]+)", device_string)
+        dev_part_match = re.search(r"0x([0-9a-fA-F]+)", device_string)
         if dev_part_match:
             dev_part_value = dev_part_match.group(1)
-            project_code = next((key for key in self.smart_criteria[0].keys() if dev_part_value in key), None)
+            project_code = next((key for key in self.smart_criteria[0].keys() if key is not None and re.search(dev_part_value, key, re.IGNORECASE)), None)
         if not project_code:
-            project_code = next((key for key in self.smart_criteria[0].keys() if "SSD01" in key), None)
+            project_code = next((key for key in self.smart_criteria[0].keys() if key is not None and re.search("SSD01", key, re.IGNORECASE)), None)
         return project_code
 
     def evaluate_condition(self, value_before, value_after, conditions):
@@ -249,7 +249,7 @@ class SmartData:
 
     def get_log_page(self, customer_code):
         log_id, log_length = {
-            "SSS": ["0xFE", 8192],
+            "SSD": ["0xFE", 8192],
             "HP": ["0xC7", 512],
             "MS": ["0xC0", 512],
             "LENOVO": ["0xDF", 512],
@@ -268,7 +268,7 @@ class SmartData:
 
     def parse_smart_data(self, smart_data, customer_code):
         for template in filter(lambda x: x["customer"] == customer_code, self.smart_criteria):
-            byte_offset = template["byte_offset"]
+            byte_offset = str(template["byte_offset"])
             field_name = template["field_name"]
             bytes_data = self.get_bytes(smart_data, byte_offset)
             if field_name == "Reserved":
