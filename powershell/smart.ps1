@@ -259,7 +259,7 @@ class SmartDataComparer {
 
     [array] GetLogPage($CustomerCode) {
         $logIdMap = @{
-            "SKH"    = ("0xFE", 8192)
+            "SSD"    = ("0xFE", 8192)
             "HP"     = ("0xC7", 512)
             "MS"     = ("0xC0", 512)
             "LENOVO" = ("0xDF", 512)
@@ -379,7 +379,7 @@ class SmartDataComparer {
         $this.ParseSmartData($smartData, "LENOVO")
         $smartData = $this.GetLogPage("DELL")
         $this.ParseSmartData($smartData, "DELL")
-        $smartData = $this.GetLogPage("SKH")
+        $smartData = $this.GetLogPage("SSD")
         $wai, $waf = $this.GetWaiWaf($smartData[512..($smartData.Length - 1)])
         Add-Content -Path $this.SmartfilePath -Value "WAI,000,$('{0:F6}' -f $wai),$('{0:F6}' -f $wai),[ETC] (ec_slc_total + ec_tlc_total) / write_from_host"
         Add-Content -Path $this.SmartfilePath -Value "WAF,000,$('{0:F6}' -f $waf),$('{0:F6}' -f $waf),[ETC] (written_to_tlc_user + written_to_slc_buf) / write_from_host"

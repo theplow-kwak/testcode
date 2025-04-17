@@ -3,6 +3,8 @@
 import argparse
 import json
 import os
+
+from command_runner import CommandRunner
 from disk_manager import DiskManager, get_partition_name
 
 
@@ -51,7 +53,8 @@ def main():
         return
 
     try:
-        manager = DiskManager(args.disk, getattr(args, "tool", "parted"))
+        hostRoot = CommandRunner()
+        manager = DiskManager(hostRoot, args.disk, getattr(args, "tool", "parted"))
 
         if args.command == "create":
             manager.create_partition_table(args.table, force=args.force)

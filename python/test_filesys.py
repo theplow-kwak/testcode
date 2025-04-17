@@ -5,25 +5,24 @@ import unittest
 from unittest.mock import patch, MagicMock
 from filesys import CommandRunner, DiskManager, PartitionManager
 
+
 class TestCommandRunner(unittest.TestCase):
     @patch("filesys.subprocess.run")
     def test_execute_success(self, mock_run):
         mock_run.return_value = MagicMock(stdout="output", returncode=0)
-        result = CommandRunner.execute("echo test")
+        result = CommandRunner.VmExec("echo test")
         self.assertEqual(result, "output")
         mock_run.assert_called_once()
 
     @patch("filesys.subprocess.run")
     def test_execute_failure(self, mock_run):
-        mock_run.side_effect = subprocess.CalledProcessError(
-            returncode=1, cmd="echo test", output="error", stderr="stderr"
-        )
+        mock_run.side_effect = subprocess.CalledProcessError(returncode=1, cmd="echo test", output="error", stderr="stderr")
         with self.assertRaises(RuntimeError):
-            CommandRunner.execute("echo test")
+            CommandRunner.VmExec("echo test")
 
     @patch("filesys.subprocess.Popen")
     def test_execute_background(self, mock_popen):
-        CommandRunner.execute("echo test", background=True)
+        CommandRunner.VmExec("echo test", background=True)
         mock_popen.assert_called_once()
 
 

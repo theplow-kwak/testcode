@@ -1,61 +1,30 @@
-#!/usr/bin/env python3
-
-import argparse
 import json
 import logging
 import os
-import stat
-import subprocess
+import re
 from typing import Dict, List, Optional
+
+from command_runner import VM_LOG_MSG_TYPE_DEBUG, VM_LOG_MSG_TYPE_ERROR, VM_LOG_MSG_TYPE_WARN, VmCommon
 
 logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
 
 
-class CommandRunner:
-    def __init__(self, ignore_error: bool = False, return_stdout: bool = True, background: bool = False):
-        self.ignore_error = ignore_error
-        self.return_stdout = return_stdout
-        self.background = background
-        self.sudo_cmd = "sudo " if os.geteuid() != 0 else ""
-
-    def run_command(self, cmd: str, ignore_error=None) -> Optional[str]:
-        """Run a shell command and handle errors."""
-        cmd = f"{self.sudo_cmd}{cmd}"
-        ignore_error = ignore_error or self.ignore_error
-        try:
-            logging.debug(f"Executing command: {cmd}")
-            if self.background:
-                subprocess.Popen(cmd, shell=True)
-                return None
-            result = subprocess.run(cmd, shell=True, text=True, stdout=subprocess.PIPE if self.return_stdout else None, stderr=subprocess.PIPE)
-            if result.returncode != 0 and not ignore_error:
-                raise RuntimeError(f"Command failed: {cmd}\nError: {result.stderr}")
-            return result.stdout.strip() if self.return_stdout else None
-        except Exception as e:
-            if not ignore_error:
-                raise RuntimeError(f"Error executing command: {cmd}\n{e}")
-            return None
-
-    @staticmethod
-    def command_exists(cmd: str) -> bool:
-        """Check if a command exists on the system."""
-        return subprocess.call(f"type {cmd}", shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE) == 0
+def get_base_disk(path: str) -> str:
+    """Extract the base disk name from a partition."""
+    basename = os.path.basename(path)
+    return path.rsplit("p", 1)[0] if basename.startswith("nvme") else re.sub(r"\d+$", "", basename)
 
 
-def resolve_disk_path(disk: str) -> str:
+def resolve_disk_path(hostRoot, disk: str) -> str:
     """
     Resolve the full path of a disk and ensure it is a valid block device.
     If the input is a partition, return the corresponding base disk name.
     """
 
     def is_block_device(path: str) -> bool:
-        """Check if the given path is a block device."""
-        return os.path.exists(path) and stat.S_ISBLK(os.stat(path).st_mode)
-
-    def get_base_disk(path: str) -> str:
-        """Extract the base disk name from a partition."""
-        basename = os.path.basename(path)
-        return path.rsplit("p", 1)[0] if "p" in basename and basename.startswith("nvme") else path.rstrip("0123456789")
+        """Check if the given path is a block device using a bash command."""
+        hostRoot.VmExec(f"test -b {path}")
+        return hostRoot.VmExecStatus() == "0"
 
     # Resolve and validate the disk path
     if not disk.startswith("/dev/"):
@@ -67,11 +36,12 @@ def resolve_disk_path(disk: str) -> str:
     return base_disk if base_disk != disk and is_block_device(base_disk) else disk
 
 
-def list_available_disks() -> List[str]:
+def list_available_disks(hostRoot) -> List[str]:
     """List all available disks that are not mounted."""
-    runner = CommandRunner()
-    output = runner.run_command("lsblk -dn -o NAME,TYPE,MOUNTPOINT")
-    return [f"/dev/{name}" for line in (output or "").strip().splitlines() for name, dtype, mountpoint in [line.split()] if dtype == "disk" and not mountpoint]
+    output = hostRoot.VmExec("lsblk -P -e7 -dn -o NAME,TYPE,MOUNTPOINT")
+    parsed_output = [{k: v.strip('"') for k, v in (item.split("=", 1) for item in line.split() if "=" in item)} for line in output.strip().splitlines()]
+    available_disks = [entry["NAME"] for entry in parsed_output if entry["TYPE"] == "disk" and not entry["MOUNTPOINT"]]
+    return [f"/dev/{disk}" for disk in available_disks]
 
 
 def get_partition_name(disk: str, idx: int) -> str:
@@ -81,15 +51,32 @@ def get_partition_name(disk: str, idx: int) -> str:
     return f"{disk}{suffix}"
 
 
+def convert_size_to_mb(size_str: str, total_mb: int) -> int:
+    size_str = size_str.lower().strip()
+    if size_str.endswith("%"):
+        percent = float(size_str[:-1])
+        return int((percent / 100.0) * total_mb)
+    elif size_str.endswith("tib"):
+        return int(float(size_str[:-3]) * 1024 * 1024)
+    elif size_str.endswith("gib"):
+        return int(float(size_str[:-3]) * 1024)
+    elif size_str.endswith("mib"):
+        return int(float(size_str[:-3]))
+    elif size_str.endswith("gb"):
+        return int(float(size_str[:-2]) * 1000)
+    elif size_str.endswith("mb"):
+        return int(float(size_str[:-2]))
+    else:
+        raise int(size_str)
+
+
 class DiskManager:
-    def __init__(self, disk: str, tool: str = "parted", force: bool = False):
-        self.disk = resolve_disk_path(disk)
-        self.tool = tool  # 'parted' or 'fdisk'
+    def __init__(self, hostRoot, disk: str, force: bool = False):
+        self.hostRoot = hostRoot
+        self.disk = resolve_disk_path(self.hostRoot, disk)
         self.force = force  # Allow forced operations
-        self.cmd_runner = CommandRunner()
         self.partition_info = {}
-        self.mount_info = []  # Cache for lsblk mount info
-        self.refresh_lsblk_info(refresh_partition=True, refresh_mount=True)
+        self.refresh_lsblk_info(refresh_partition=True)
         self.is_bootdevice = self.check_protected_disk()
 
     def _refresh_lsblk_info(self, fields: str) -> List[Dict[str, str]]:
@@ -99,43 +86,32 @@ class DiskManager:
         :return: A list of dictionaries with the parsed `lsblk` output.
         """
         cmd = f"lsblk -P -e7 -o {fields} {self.disk}"
-        output = self.cmd_runner.run_command(cmd)
+        output = self.hostRoot.VmExec(cmd)
         if not output:
             return []
         return [{k: v.strip('"') for k, v in (item.split("=", 1) for item in line.split() if "=" in item)} for line in output.strip().splitlines()]
 
-    def refresh_lsblk_info(self, refresh_partition: bool = False, refresh_mount: bool = False):
+    def refresh_lsblk_info(self, refresh_partition: bool = False):
         """
         Refresh partition and/or mount information for the disk.
         :param refresh_partition: If True, refresh partition information.
         :param refresh_mount: If True, refresh mount information.
         """
         if refresh_partition:
-            self.partition_info = {entry["NAME"]: entry for entry in self._refresh_lsblk_info("NAME,SIZE,TYPE,FSTYPE,MOUNTPOINT")}
-            logging.debug(f"Partition info: {json.dumps(self.partition_info, indent=2)}")
-
-        if refresh_mount:
-            self.mount_info = self._refresh_lsblk_info("NAME,MOUNTPOINT")
-            logging.debug(f"Mount info: {self.mount_info}")
-
-    def get_mount_info(self, refresh: bool = False) -> List[Dict[str, str]]:
-        """Get cached mount information, optionally refreshing it."""
-        if refresh or not self.mount_info:
-            self.refresh_lsblk_info(refresh_mount=True)
-        return self.mount_info
+            self.partition_info = {entry["NAME"]: entry for entry in self._refresh_lsblk_info("NAME,SIZE,TYPE,FSTYPE,MOUNTPOINT") if entry["TYPE"] == "part"}
+            VmCommon.LogMsg(f"Partition info: {json.dumps(self.partition_info, indent=2)}", msgType=VM_LOG_MSG_TYPE_DEBUG)
 
     def check_protected_disk(self) -> bool:
         """
         Check if the disk is protected (e.g., mounted, contains the root filesystem, or is a boot disk).
         """
-        mount_info = self.get_mount_info(refresh=True)
-        if any(entry.get("MOUNTPOINT", "") in ["/", "/boot", "/boot/efi"] for entry in mount_info):
-            logging.warning(f"{self.disk} contains the root filesystem and cannot be modified.")
+        if any(entry.get("MOUNTPOINT", "") in ["/", "/boot", "/boot/efi"] for _name, entry in self.partition_info.items()):
+            VmCommon.LogMsg(f"{self.disk} contains the root filesystem and cannot be modified.", msgType=VM_LOG_MSG_TYPE_WARN)
             return True
 
-        boot_device = self.cmd_runner.run_command("lsblk -no NAME,PARTLABEL | grep -i boot", ignore_error=True)
+        boot_device = self.hostRoot.VmExec("lsblk -no NAME,PARTLABEL | grep -i boot", ignoreError=True)
         if boot_device and os.path.basename(self.disk) in boot_device:
-            logging.warning(f"{self.disk} is a boot disk and cannot be modified.")
+            VmCommon.LogMsg(f"{self.disk} is a boot disk and cannot be modified.", msgType=VM_LOG_MSG_TYPE_WARN)
             return True
         return False
 
@@ -145,9 +121,10 @@ class DiskManager:
         :param force: If True, ignore warnings and proceed despite mounted partitions.
         :return: True if mounted partitions are found, False otherwise.
         """
-        mount_info = self.get_mount_info()
         mounted_partitions = [
-            f"/dev/{entry['NAME']} is mounted at {entry['MOUNTPOINT']}" for entry in mount_info if entry["NAME"].startswith(os.path.basename(self.disk)) and entry.get("MOUNTPOINT")
+            f"/dev/{entry_name} is mounted at {entry['MOUNTPOINT']}"
+            for entry_name, entry in self.partition_info.items()
+            if entry_name.startswith(os.path.basename(self.disk)) and entry.get("MOUNTPOINT")
         ]
         if mounted_partitions:
             for warning in mounted_partitions:
@@ -157,116 +134,46 @@ class DiskManager:
     def create_partition_table(self, table_type: str, force: bool = False):
         """Create a partition table on the disk."""
         if self.check_and_warn_mounted_partitions(force=force):
-            logging.error(f"Cannot create partition table on {self.disk} because some partitions are mounted.")
+            VmCommon.LogMsg(f"Cannot create partition table on {self.disk} because some partitions are mounted.", msgType=VM_LOG_MSG_TYPE_ERROR)
             return
         try:
-            self.cmd_runner.run_command(f"parted -s {self.disk} mklabel {table_type}")
-            self.refresh_lsblk_info(refresh_partition=True, refresh_mount=True)
+            self.hostRoot.VmExec(f"parted -s {self.disk} mklabel {table_type}")
+            self.refresh_lsblk_info(refresh_partition=True)
             logging.info(f"Created {table_type} partition table on {self.disk}")
         except Exception as e:
-            logging.error(f"Failed to create partition table: {e}")
+            VmCommon.LogMsg(f"Failed to create partition table: {e}", msgType=VM_LOG_MSG_TYPE_ERROR)
 
     def create_partitions(self, partitions: List[Dict], force: bool = False):
-        """
-        Create partitions on the disk.
-        :param partitions: A list of dictionaries defining partitions with keys:
-                           - "start": Start of the partition (e.g., "1MiB").
-                           - "end": End of the partition (e.g., "500MiB").
-                           - "type": (Optional) Partition type (e.g., "primary").
-        :param force: If True, ignore warnings and proceed despite mounted partitions.
-        """
         if not partitions:
-            raise ValueError("No partitions defined for creation.")
-
-        # Validate partition definitions
-        for idx, part in enumerate(partitions):
-            if "start" not in part or "end" not in part:
-                raise ValueError(f"Partition {idx + 1} is missing required keys ('start' and 'end').")
+            partitions = [{"size": "100%"}]
 
         if self.check_and_warn_mounted_partitions(force=force):
-            logging.error(f"Cannot create partitions on {self.disk} because some partitions are mounted.")
-            return
+            VmCommon.LogMsg(f"Cannot create partitions on {self.disk} because some partitions are mounted.", msgType=VM_LOG_MSG_TYPE_ERROR)
+            return self.get_partitions()
 
         try:
-            if self.tool == "parted":
-                for idx, part in enumerate(partitions):
-                    part_type = part.get("type", "primary")
-                    start = part["start"]
-                    end = part["end"]
-                    logging.info(f"Creating partition {idx + 1}: type={part_type}, start={start}, end={end}")
-                    self.cmd_runner.run_command(f"parted -s {self.disk} mkpart {part_type} {start} {end}")
-            elif self.tool == "fdisk":
-                script = "\n".join(f"n\n\n{part['start']}\n{part['end']}" for part in partitions) + "\nw\n"
-                logging.info(f"Creating partitions using fdisk script:\n{script}")
-                self.cmd_runner.run_command(f"printf '{script}' | fdisk {self.disk}")
+            start_mb = 1
+            total_mb = self.get_disk_size_mib()
+            for idx, part in enumerate(partitions):
+                part_type = part.get("type", "primary")
+                size_mb = convert_size_to_mb(part["size"], total_mb)
+                end_mb = min(start_mb + size_mb, total_mb - 1)
+                self.hostRoot.VmExec(f"parted -s {self.disk} mkpart {part_type} {start_mb}MiB {end_mb}MiB")
+                start_mb = end_mb
             self.refresh_lsblk_info(refresh_partition=True)
-            logging.info(f"Successfully created partitions on {self.disk}")
+            return self.get_partitions()
         except Exception as e:
-            logging.error(f"Failed to create partitions: {e}")
+            VmCommon.LogMsg(f"Failed to create partitions: {e}", msgType=VM_LOG_MSG_TYPE_ERROR)
+            return None
 
-    def delete_all_partitions(self, force: bool = False):
-        """Delete all partitions on the disk."""
-        mount_info = self.get_mount_info(refresh=True)
-        if self.check_and_warn_mounted_partitions(force=force):
-            if force:
-                logging.warning("Force mode enabled. Attempting to unmount all mounted partitions.")
-                for entry in mount_info:
-                    name = entry.get("NAME", "")
-                    mountpoint = entry.get("MOUNTPOINT", "")
-                    if name.startswith(os.path.basename(self.disk)) and mountpoint:
-                        self.unmount_partition(mountpoint)
-            else:
-                logging.error(f"Cannot delete partitions on {self.disk} because some partitions are mounted.")
-                return
+    def get_disk_size_mib(self) -> int:
+        """Get the size of the disk in MiB."""
         try:
-            self.cmd_runner.run_command(f"wipefs -a {self.disk}")
-            self.refresh_lsblk_info(refresh_partition=True, refresh_mount=True)
-            logging.info(f"Deleted all partitions and wiped filesystem signatures on {self.disk}")
+            output = self.hostRoot.VmExec(f"lsblk -b -dn -o SIZE {self.disk}")
+            return int(output.strip()) // (1024 * 1024)
         except Exception as e:
-            logging.error(f"Failed to delete partitions: {e}")
-
-    def format_partition(self, partition: str, fstype: str, block_size: Optional[int] = None, force: bool = False):
-        """Format a partition with the specified filesystem."""
-        mount_info = self.get_mount_info(refresh=True)
-        for entry in mount_info:
-            name = entry.get("NAME", "")
-            mountpoint = entry.get("MOUNTPOINT", "")
-            if f"/dev/{name}" == partition and mountpoint:
-                if force:
-                    logging.warning(f"{partition} is mounted at {mountpoint}. Force mode enabled. Attempting to unmount.")
-                    self.unmount_partition(partition)
-                else:
-                    logging.error(f"Cannot format {partition} because it is mounted at {mountpoint}.")
-                    return
-        cmd = {
-            "ext4": f"mkfs.ext4 {'-b ' + str(block_size) if block_size else ''} {partition}",
-            "xfs": f"mkfs.xfs {'-b size=' + str(block_size) if block_size else ''} {'-f' if force else ''} {partition}",
-        }.get(fstype)
-        if not cmd:
-            raise ValueError("Unsupported filesystem type")
-        self.cmd_runner.run_command(cmd)
-        logging.info(f"Formatted {partition} with {fstype}")
-
-    def mount_partition(self, partition: str, mount_point: str):
-        """Mount a partition to a mount point."""
-        os.makedirs(mount_point, exist_ok=True)
-        mount_info = self.get_mount_info(refresh=True)
-        for entry in mount_info:
-            name = entry.get("NAME", "")
-            mountpoint = entry.get("MOUNTPOINT", "")
-            if f"/dev/{name}" == partition and mountpoint:
-                logging.warning(f"{partition} is already mounted at {mountpoint}. Skipping mount.")
-                return
-        self.cmd_runner.run_command(f"mount {partition} {mount_point}")
-        logging.info(f"Mounted {partition} to {mount_point}")
-
-    def unmount_partition(self, partition: str):
-        """Unmount a partition."""
-        try:
-            self.cmd_runner.run_command(f"umount {partition}")
-            logging.info(f"Unmounted {partition}")
-        except Exception as e:
-            logging.error(f"Failed to unmount {partition}: {e}")
+            VmCommon.LogMsg(f"Failed to get disk size: {e}", msgType=VM_LOG_MSG_TYPE_ERROR)
+            return 0
 
     def delete_partition(self, partition: str, force: bool = False):
         """
@@ -274,33 +181,99 @@ class DiskManager:
         :param partition: The partition to delete (e.g., /dev/sdb1).
         :param force: If True, unmount the partition if it is mounted before deleting.
         """
-        mount_info = self.get_mount_info(refresh=True)
-        for entry in mount_info:
-            name = entry.get("NAME", "")
-            mountpoint = entry.get("MOUNTPOINT", "")
-            if f"/dev/{name}" == partition and mountpoint:
-                if force:
-                    logging.warning(f"{partition} is mounted at {mountpoint}. Force mode enabled. Attempting to unmount.")
-                    self.unmount_partition(partition)
-                else:
-                    logging.error(f"Cannot delete {partition} because it is mounted at {mountpoint}.")
-                    return
+        mountpoint = self.partition_info.get(partition, {}).get("MOUNTPOINT", "")
+        if mountpoint:
+            if force:
+                logging.warning(f"{partition} is mounted at {mountpoint}. Force mode enabled. Attempting to unmount.")
+                self.unmount_partition(partition)
+            else:
+                VmCommon.LogMsg(f"Cannot delete {partition} because it is mounted at {mountpoint}.", msgType=VM_LOG_MSG_TYPE_ERROR)
+                return
 
         try:
-            if self.tool == "parted":
-                partition_name = os.path.basename(partition)
-                logging.info(f"Deleting partition {partition_name} using parted.")
-                self.cmd_runner.run_command(f"parted -s {self.disk} rm {partition_name[-1]}")
-            elif self.tool == "fdisk":
-                logging.info(f"Deleting partition {partition} using fdisk.")
-                script = f"d\n{partition[-1]}\nw\n"
-                self.cmd_runner.run_command(f"printf '{script}' | fdisk {self.disk}")
+            base_name = get_base_disk(partition)
+            if not base_name.startswith("/dev/"):
+                base_name = f"/dev/{base_name}"
+            logging.info(f"Deleting partition {partition} using parted.")
+            self.hostRoot.VmExec(f"parted -s {base_name} rm {partition.split('p')[1]}")
             self.refresh_lsblk_info(refresh_partition=True)
             logging.info(f"Successfully deleted partition {partition}")
         except Exception as e:
-            logging.error(f"Failed to delete partition {partition}: {e}")
+            VmCommon.LogMsg(f"Failed to delete partition {partition}: {e}", msgType=VM_LOG_MSG_TYPE_ERROR)
 
-    def get_partition_info(self, refresh: bool = False) -> Dict[str, Dict[str, str]]:
+    def delete_all_partitions(self, force: bool = False):
+        """Delete all partitions on the disk."""
+        if self.check_and_warn_mounted_partitions(force=force):
+            if force:
+                logging.warning("Force mode enabled. Attempting to unmount all mounted partitions.")
+                for name, entry in self.partition_info.items():
+                    mountpoint = entry.get("MOUNTPOINT", "")
+                    if name.startswith(os.path.basename(self.disk)) and mountpoint:
+                        self.unmount_partition(mountpoint)
+            else:
+                VmCommon.LogMsg(f"Cannot delete partitions on {self.disk} because some partitions are mounted.", msgType=VM_LOG_MSG_TYPE_ERROR)
+                return
+        try:
+            self.hostRoot.VmExec(f"wipefs -a {self.disk}")
+            self.refresh_lsblk_info(refresh_partition=True)
+            logging.info(f"Deleted all partitions and wiped filesystem signatures on {self.disk}")
+        except Exception as e:
+            VmCommon.LogMsg(f"Failed to delete partitions: {e}", msgType=VM_LOG_MSG_TYPE_ERROR)
+
+    def format_partition(self, partition: str, fstype: str, block_size: Optional[int] = 4096, force: bool = False):
+        """Format a partition with the specified filesystem."""
+        if partition == get_base_disk(partition):
+            logging.warning(f"Cannot format the base disk {partition}. Please specify a partition.")
+            return False
+        mountpoint = self.partition_info.get(partition, {}).get("MOUNTPOINT", "")
+        if mountpoint:
+            if force:
+                logging.warning(f"{partition} is mounted at {mountpoint}. Force mode enabled. Attempting to unmount.")
+                self.unmount_partition(partition)
+            else:
+                VmCommon.LogMsg(f"Cannot format {partition} because it is mounted at {mountpoint}.", msgType=VM_LOG_MSG_TYPE_ERROR)
+                return False
+        if not partition.startswith("/dev/"):
+            partition = f"/dev/{partition}"
+        cmd = {
+            "ext4": f"echo y | mkfs.ext4 {'-b ' + str(block_size) if block_size else ''} {partition}",
+            "xfs": f"echo y | mkfs.xfs {'-b size=' + str(block_size) if block_size else ''} {'-f' if force else ''} {partition}",
+        }.get(fstype)
+        if not cmd:
+            raise ValueError("Unsupported filesystem type")
+        self.hostRoot.VmExec(cmd)
+        logging.info(f"Formatted {partition} with {fstype}")
+        self.refresh_lsblk_info(refresh_partition=True)
+        return True
+
+    def mount_partition(self, partition: str, mount_point: str = None):
+        """Mount a partition to a mount point."""
+        if partition == get_base_disk(partition):
+            logging.warning(f"Cannot mount the base disk {partition}. Please specify a partition.")
+            return ""
+        partition_info = self.partition_info.get(partition, {})
+        if mountpoint := partition_info.get("MOUNTPOINT", ""):
+            logging.warning(f"{partition} is already mounted at {mountpoint}. Skipping mount.")
+            return mountpoint
+        mount_path = mount_point or f"/root/mnt/{partition}_{partition_info.get("FSTYPE", "")}"
+        self.hostRoot.VmExec(f"mkdir -p {mount_path}", ignoreError=True)
+        if not partition.startswith("/dev/"):
+            partition = f"/dev/{partition}"
+        self.hostRoot.VmExec(f"mount {partition} {mount_path}")
+        logging.info(f"Mounted {partition} to {mount_path}")
+        self.refresh_lsblk_info(refresh_partition=True)
+        return mount_path
+
+    def unmount_partition(self, mount_path: str):
+        """Unmount a partition."""
+        try:
+            self.hostRoot.VmExec(f"umount {mount_path}")
+            logging.info(f"Unmounted {mount_path}")
+            self.refresh_lsblk_info(refresh_partition=True)
+        except Exception as e:
+            VmCommon.LogMsg(f"Failed to unmount {mount_path}: {e}", msgType=VM_LOG_MSG_TYPE_ERROR)
+
+    def get_partitions(self, refresh: bool = False) -> Dict[str, Dict[str, str]]:
         """
         Get partition information for the disk.
         :param refresh: If True, refresh the partition information before returning it.
@@ -322,100 +295,3 @@ class DiskManager:
 
         partition_name = get_partition_name(self.disk, index)
         return self.partition_info.get(partition_name)
-
-
-def main():
-    parser = argparse.ArgumentParser(description="Disk Partition Manager")
-    parser.add_argument("commands", nargs="+", help="Actions to perform: wipe, create, format, mount, unmount, delete")
-    parser.add_argument("--disk", help="Target disk (e.g., /dev/sdb or nvme0)")
-    parser.add_argument("--tool", choices=["parted", "fdisk"], default="parted")
-    parser.add_argument("--table", choices=["gpt", "msdos"], help="Partition table type")
-    parser.add_argument("--partitions", help="JSON list of partitions with start/end/type")
-    parser.add_argument("--fstype", choices=["ext4", "xfs"], help="Filesystem type")
-    parser.add_argument("--blocksize", type=int, help="Filesystem block size")
-    parser.add_argument("--wipe", action="store_true", help="Wipe the disk before creating partition table")
-    parser.add_argument("--force", action="store_true", help="Force operations even if partitions are mounted")
-
-    args = parser.parse_args()
-
-    if not args.disk:
-        print("Available disks:")
-        for d in list_available_disks():
-            print(f"  {d}")
-        return
-
-    try:
-        manager = DiskManager(args.disk, args.tool, force=args.force)
-
-        partitions = json.loads(args.partitions) if args.partitions else []
-
-        actions = {
-            "wipe": lambda: manager.delete_all_partitions(force=args.force),
-            "create": lambda: (
-                manager.create_partition_table(args.table, force=args.force) if args.table else None,
-                manager.create_partitions(partitions, force=args.force) if partitions else None,
-            ),
-            "format": lambda: (
-                [manager.format_partition(get_partition_name(manager.disk, idx), args.fstype, args.blocksize, force=args.force) for idx, _ in enumerate(partitions)]
-                if args.fstype
-                else ValueError("Filesystem type must be specified for format")
-            ),
-            "delete": lambda: (
-                partition_index := int(input("Enter the partition index to delete (e.g., 1 for the first partition): ")) - 1,
-                part_name := get_partition_name(manager.disk, partition_index),
-                print(f"[ACTION] Deleting partition {part_name}..."),
-                manager.delete_partition(part_name, force=args.force),
-            ),
-            "mount": lambda: [manager.mount_partition(get_partition_name(manager.disk, idx), f"/mnt/partition{idx+1}") for idx, _ in enumerate(partitions)],
-            "unmount": lambda: [manager.unmount_partition(get_partition_name(manager.disk, idx)) for idx, _ in enumerate(partitions)],
-        }
-
-        for cmd in args.commands or []:
-            if cmd == "wipe" or args.wipe:
-                print(f"[ACTION] Wiping {args.disk}...")
-                manager.delete_all_partitions(force=args.force)
-
-            elif cmd == "create":
-                if args.table:
-                    print(f"[ACTION] Creating partition table {args.table}...")
-                    manager.create_partition_table(args.table, force=args.force)
-                if partitions:
-                    print(f"[ACTION] Creating partitions...")
-                    manager.create_partitions(partitions, force=args.force)
-
-            elif cmd == "format":
-                if not args.fstype:
-                    raise ValueError("Filesystem type must be specified for format")
-                for idx, _ in enumerate(partitions):
-                    part_name = get_partition_name(manager.disk, idx)
-                    print(f"[ACTION] Formatting {part_name} with {args.fstype}...")
-                    manager.format_partition(part_name, args.fstype, args.blocksize, force=args.force)
-
-            elif cmd == "delete":
-                partition_index = int(input("Enter the partition index to delete (e.g., 1 for the first partition): ")) - 1
-                part_name = get_partition_name(manager.disk, partition_index)
-                print(f"[ACTION] Deleting partition {part_name}...")
-                manager.delete_partition(part_name, force=args.force)
-
-            elif cmd == "mount":
-                for idx, _ in enumerate(partitions):
-                    part_name = get_partition_name(manager.disk, idx)
-                    mount_point = f"/mnt/partition{idx+1}"
-                    print(f"[ACTION] Mounting {part_name} to {mount_point}...")
-                    manager.mount_partition(part_name, mount_point)
-
-            elif cmd == "unmount":
-                for idx, _ in enumerate(partitions):
-                    part_name = get_partition_name(manager.disk, idx)
-                    print(f"[ACTION] Unmounting {part_name}...")
-                    manager.unmount_partition(part_name)
-
-        print("\n[INFO] Final partition state:")
-        print(json.dumps(manager.get_partition_info(refresh=True), indent=2))
-
-    except Exception as e:
-        print(f"[ERROR] {e}")
-
-
-if __name__ == "__main__":
-    main()

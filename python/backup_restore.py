@@ -2,43 +2,10 @@
 
 import argparse
 import logging
-import shlex
-import subprocess
-import sys
-from typing import Optional
+
+from command_runner import CommandRunner
 
 logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
-
-
-class CommandRunner:
-    def __init__(self, ignore_error: bool = False, return_stdout: bool = True, background: bool = False):
-        self.ignore_error = ignore_error
-        self.return_stdout = return_stdout
-        self.background = background
-        self.sudo_cmd = "sudo " if os.geteuid() != 0 else ""
-
-    def run_command(self, cmd: str, ignore_error=None) -> Optional[str]:
-        """Run a shell command and handle errors."""
-        cmd = f"{self.sudo_cmd}{cmd}"
-        ignore_error = ignore_error or self.ignore_error
-        try:
-            logging.debug(f"Executing command: {cmd}")
-            if self.background:
-                subprocess.Popen(cmd, shell=True)
-                return None
-            result = subprocess.run(cmd, shell=True, text=True, stdout=subprocess.PIPE if self.return_stdout else None, stderr=subprocess.PIPE)
-            if result.returncode != 0 and not ignore_error:
-                raise RuntimeError(f"Command failed: {cmd}\nError: {result.stderr}")
-            return result.stdout.strip() if self.return_stdout else None
-        except Exception as e:
-            if not ignore_error:
-                raise RuntimeError(f"Error executing command: {cmd}\n{e}")
-            return None
-
-    @staticmethod
-    def command_exists(cmd: str) -> bool:
-        """Check if a command exists on the system."""
-        return subprocess.call(f"type {cmd}", shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE) == 0
 
 
 class QemuImgManager:

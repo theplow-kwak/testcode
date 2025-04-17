@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 
-import os
-import subprocess
 import csv
-import re
-from openpyxl import load_workbook
 import logging
+import os
+import re
+
+from openpyxl import load_workbook
+
+from command_runner import CommandRunner
 
 # 로깅 설정
 logging.basicConfig(level=logging.INFO)
@@ -17,23 +19,6 @@ DATA_PATH = f"{CURRENT_PATH}/data"
 LOG_PATH = f"{CURRENT_PATH}/logs"
 LOG_ERROR = logging.ERROR
 LOG_INFO = logging.INFO
-
-
-class CommandRunner:
-    def VmExec(self, cmd: str, ignoreError: bool = True) -> str:
-        try:
-            logging.info(f"Running command: {cmd}")
-            result = subprocess.run(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, check=not ignoreError)
-            if result.returncode != 0:
-                logging.warning(f"Command failed but ignored. Error: {result.stdout.strip()}")
-            else:
-                logging.info(f"Command executed successfully. Output: {result.stdout.strip()}")
-            return result.stdout.strip()
-        except subprocess.CalledProcessError as e:
-            logging.error(f"An error occurred while executing the command: {e.stderr}")
-            if not ignoreError:
-                raise e
-        return ""
 
 
 class nvme_common:
@@ -304,7 +289,7 @@ class SmartData:
             self.parse_smart_data(smart_data, "NVME")
             self.parse_smart_data(smart_data, nvme_customer_code)
 
-            customer_codes = ["HP", "MS", "LENOVO", "DELL", "SKH"]
+            customer_codes = ["HP", "MS", "LENOVO", "DELL", "SSD"]
             for code in customer_codes:
                 smart_data = self.get_log_page(code)
                 self.parse_smart_data(smart_data, code)

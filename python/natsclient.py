@@ -4,9 +4,9 @@ import argparse
 import asyncio
 import json
 import logging
-import time
 import threading
-import sys
+import time
+
 from nats.aio.client import Client as NATS
 
 # 로깅 설정
