@@ -1,0 +1,46 @@
+import argparse
+import getpass
+import functools
+
+
+def build_parser():
+    parser = argparse.ArgumentParser(formatter_class=argparse.RawTextHelpFormatter)
+    parser.add_argument("--secboot", default="", action="store_const", const=".secboot", help="Using secureboot of UEFI")
+    parser.add_argument("--bios", action="store_true", help="Using legacy BIOS instead of UEFI")
+    parser.add_argument("--consol", action="store_true", help="Use current terminal as console I/O")
+    parser.add_argument("--noshare", action="store_true", help="Disable virtiofs sharing")
+    parser.add_argument("--nousb", action="store_true", help="Disable USB port")
+    parser.add_argument("--qemu", "-q", action="store_true", help="Use public qemu distribution")
+    parser.add_argument("--rmssh", action="store_true", help="Remove existing SSH key")
+    parser.add_argument("--tpm", action="store_true", help="Enable TPM device (e.g. for Windows 11)")
+    parser.add_argument("--arch", "-a", default="x86_64", choices=["x86_64", "aarch64", "arm", "riscv64"], help="Target VM architecture")
+    parser.add_argument("--connect", default="spice", choices=["ssh", "spice", "qemu"], help="Connection method")
+    parser.add_argument("--debug", "-d", nargs="?", const="info", default="warning", choices=["cmd", "debug", "info", "warning"], help="Set logging level")
+    parser.add_argument("--ipmi", choices=["internal", "external"], help="Enable IPMI support (internal or external)")
+    parser.add_argument("--machine", default="q35", choices=["q35", "ubuntu-q35", "pc", "ubuntu", "virt", "sifive_u"], help="QEMU machine type")
+    parser.add_argument("--net", default="bridge", choices=["user", "tap", "bridge", "none"], help="Network interface model")
+    parser.add_argument("--uname", "-u", default=getpass.getuser(), help="Login user name")
+    parser.add_argument("--vga", default="qxl", help="VGA graphic card type (e.g. virtio, qxl)")
+    parser.add_argument("--stick", help="Set USB stick image")
+    parser.add_argument("--ip", help="Set local IP manually")
+    parser.add_argument("images", metavar="IMAGES", nargs="*", help="VM boot images")
+    parser.add_argument("--nvme", help="NVMe device config string")
+    parser.add_argument("--disk", help="Physical disk image to use (e.g. sda:1)")
+    parser.add_argument("--vender", help="Set PC vendor name for SMBIOS")
+    parser.add_argument("--kernel", dest="vmkernel", help="Linux kernel image")
+    parser.add_argument("--rootdev", help="Root filesystem device")
+    parser.add_argument("--initrd", help="Initrd image")
+    parser.add_argument("--pcihost", help="PCI passthrough device (e.g. 0000:00:1f.2)")
+    parser.add_argument("--numns", type=int, help="Number of NVMe namespaces")
+    parser.add_argument("--nssize", type=int, default=1, help="Size of each NVMe namespace in GB")
+    parser.add_argument("--num_queues", type=int, default=32, help="Max number of NVMe I/O queues")
+    parser.add_argument("--vnum", default="", help="VM copies identifier (not yet implemented)")
+    parser.add_argument("--sriov", action="store_true", help="Enable SR-IOV NVMe configuration")
+    parser.add_argument("--fdp", action="store_true", help="Enable FDP (Flexible Data Placement)")
+    parser.add_argument("--hvci", action="store_true", help="Enable Hypervisor-Protected Code Integrity (HVCI)")
+    parser.add_argument("--did", type=functools.partial(int, base=0), help="NVMe Device ID (hex)")
+    parser.add_argument("--mn", help="NVMe Model Name")
+    parser.add_argument("--ext", help="Extra parameters for QEMU")
+    parser.add_argument("--memsize", help="Override memory size (e.g. 8G)")
+
+    return parser

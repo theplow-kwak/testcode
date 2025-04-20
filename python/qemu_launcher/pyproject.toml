@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "qemu-launcher"
+version = "0.1.0"
+description = "A modular CLI tool to generate and run QEMU virtual machines"
+authors = [
+  { name = "Your Name", email = "you@example.com" }
+]
+requires-python = ">=3.8"
+dependencies = []
+readme = "README.md"
+license = { text = "MIT" }
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Operating System :: POSIX :: Linux",
+  "License :: OSI Approved :: MIT License",
+  "Development Status :: 4 - Beta"
+]
+
+[project.scripts]
+qemu-launcher = "qemu_launcher.main:main"
