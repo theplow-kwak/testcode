@@ -15,7 +15,7 @@ def configure_virtiofs(args, env, params, sudo_prefix, terminal_prefix):
     if not Path(virtiofs_bin).exists():
         virtiofs_bin = "/usr/libexec/virtiofsd"
 
-    virtiofsd_cmd = sudo_prefix + terminal_prefix + ["--geometry=80x24+5+5", "--", f"{virtiofs_bin} --socket-path={sock_path} --shared-dir={env['home']}"]
+    virtiofsd_cmd = sudo_prefix + terminal_prefix + [f"{virtiofs_bin} --socket-path={sock_path} --shared-dir={env['home']}"]
 
     run_command(virtiofsd_cmd)
     while not Path(sock_path).exists():

@@ -1,4 +1,5 @@
 import os
+import shlex
 import time
 import hashlib
 from pathlib import Path
@@ -53,6 +54,7 @@ class QemuLauncher:
         self._generate_identifiers()
         self._set_memory_size()
         self._resolve_paths()
+        self._configure_base_devices()
 
         configure_usb(self.args.arch, self.args, self.params, index=0)
         configure_kernel(self.args, self.kernel_args, self.args.images, self.args.arch, self.args.connect)
@@ -60,7 +62,7 @@ class QemuLauncher:
         configure_nvme(self.args, self.env, self.params)
         configure_network(self.args, self.env, self.params)
         configure_spice(self.env, self.params)
-        configure_virtiofs(self.args, self.env, self.params, self._sudo(), self._term())
+        configure_virtiofs(self.args, self.env, self.params, self._sudo(), self._term("--geometry=80x24+5+5"))
         if self.args.tpm:
             configure_tpm(self.env, self.params)
         configure_usb_storage(self.args, self.params)
@@ -135,16 +137,43 @@ class QemuLauncher:
         self.env["procid"] = f"{self.env['vmname'][:12]}_{self.env['uid']}"
 
     def _set_memory_size(self):
-        try:
-            pages = os.sysconf("SC_PHYS_PAGES")
-            page_size = os.sysconf("SC_PAGE_SIZE")
-            mem_gb = (pages * page_size) / (1024 * 1024 * 1024)
-            self.env["memsize"] = "8G" if mem_gb > 8 else "4G"
-        except Exception:
-            self.env["memsize"] = "4G"
+        phy_mem = int(os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") / (1024 * 1024 * 1000))
+        self.env["memsize"] = "8G" if phy_mem > 8 else "4G"
 
     def _resolve_paths(self):
         Path("/tmp").mkdir(parents=True, exist_ok=True)
+
+    def _configure_base_devices(self):
+        self.params += [
+            f"-name {self.env['vmname']},process={self.env['procid']}"
+        ]
+        if self.args.ext:
+            self.params += shlex.split(self.args.ext)
+
+        def _set_x86_64_params():
+            """Set parameters specific to x86_64 architecture."""
+            params = [
+                f"-machine type={self.args.machine},accel=kvm,usb=on -device intel-iommu",
+                (
+                    "-cpu Skylake-Client-v3,hv_stimer,hv_synic,hv_relaxed,hv_reenlightenment,hv_spinlocks=0xfff,hv_vpindex,hv_vapic,hv_time,hv_frequencies,hv_runtime,+kvm_pv_unhalt,+vmx --enable-kvm"
+                    if self.args.hvci
+                    else "-cpu host --enable-kvm"
+                ),
+                "-object rng-random,id=rng0,filename=/dev/urandom -device virtio-rng-pci,rng=rng0",
+            ]
+            if not self.args.hvci and self.args.vender:
+                params.append(f"-smbios type=1,manufacturer={self.args.vender},product='{self.args.vender} Notebook PC'")
+            self.opts.append(f"-vga {self.args.vga}")
+            return params
+        
+        arch_params = {
+            "riscv64": ["-machine virt -bios none"],
+            "arm": ["-machine virt -cpu cortex-a53 -device ramfb"],
+            "aarch64": ["-machine virt,virtualization=true -cpu cortex-a72 -device ramfb"],
+            "x86_64": _set_x86_64_params(),
+        }
+        self.params.extend(arch_params.get(self.args.arch, []))
+        self.params.extend([f"-m {self.env["memsize"]}", f"-smp {os.cpu_count() // 2},sockets=1,cores={os.cpu_count() // 2},threads=1", "-nodefaults", "-rtc base=localtime"])
 
     def _build_qemu_command(self):
         arch = self.args.arch
@@ -155,7 +184,7 @@ class QemuLauncher:
     def _sudo(self):
         return ["sudo"] if os.getuid() != 0 else []
 
-    def _term(self):
-        if self.args.consol or self.args.debug == "debug":
+    def _term(self, option=""):
+        if not option and (self.args.consol or self.args.debug == "debug"):
             return []
-        return ["gnome-terminal", "--title", self.env["procid"], "--"]
+        return ["gnome-terminal", f"--title={self.env["procid"]}", option, "--"]
