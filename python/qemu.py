@@ -1,4 +1,4 @@
-# main.py
+#!/usr/bin/env python3
 
 from qemu_launcher.core import QemuLauncher
 

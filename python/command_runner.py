@@ -1,5 +1,6 @@
 import logging
 import os
+import re
 import subprocess
 from typing import Optional
 
@@ -40,6 +41,7 @@ class CommandRunner:
         self.return_stdout = return_stdout
         self.background = background
         self.returncode = None
+        self.lastOut = ""
         self.sudo_cmd = "sudo " if os.geteuid() != 0 else ""
 
     def run_command(self, cmd: str, ignoreError=None) -> Optional[str]:
@@ -55,7 +57,8 @@ class CommandRunner:
             self.returncode = result.returncode
             if result.returncode != 0 and not ignoreError:
                 raise RuntimeError(f"Command failed: {cmd}\nError: {result.stderr}")
-            return result.stdout.strip() if self.return_stdout else None
+            self.lastOut = result.stdout.strip() if self.return_stdout else None
+            return self.lastOut
         except Exception as e:
             if not ignoreError:
                 raise RuntimeError(f"Error executing command: {cmd}\n{e}")
@@ -66,6 +69,63 @@ class CommandRunner:
 
     def VmExecStatus(self):
         return str(self.returncode)
+
+    def CheckResponse(self, pat, errMsg, string="", exitOnFailure=False, isRegEx=False, ignoreError=False, logfd=None):
+        string = string or self.lastOut
+
+        VmCommon.LogMsg(f'Looking for expected string "{pat}"')
+        errMsg = f"{errMsg}\n"
+        msgType = VM_LOG_MSG_TYPE_ERROR if not ignoreError else VM_LOG_MSG_TYPE_DIAG
+        search_func = re.findall if isRegEx else str.__contains__
+        found = bool(search_func(".*%s.*" % pat, string) if isRegEx else search_func(string, pat))
+
+        if not found:
+            action = VmCommon.Exit if exitOnFailure else VmCommon.LogMsg
+            action(errMsg, msgType, logfd)
+        else:
+            VmCommon.LogMsg("Success - found expected string")
+
+        return found
+
+    def CheckResponse_cnt(self, pat, pat_count, errMsg, string="", exitOnFailure=False, isRegEx=False, ignoreError=False, logfd=None):
+        string = string or self.lastOut
+        VmCommon.LogMsg(f'Looking for expected string "{pat}" {pat_count} times')
+        errMsg = f"{errMsg}\n"
+        msgType = VM_LOG_MSG_TYPE_ERROR if not ignoreError else VM_LOG_MSG_TYPE_DIAG
+        count_func = lambda s, p: len(re.findall(f".*{p}.*", s)) if isRegEx else s.count(p)
+        found = count_func(string, pat) == pat_count
+
+        if not found:
+            action = VmCommon.Exit if exitOnFailure else VmCommon.LogMsg
+            action(errMsg, msgType, logfd)
+        else:
+            VmCommon.LogMsg(f'Success - string "{pat}" occurred {pat_count} times !!')
+
+        return found
+
+    def PackExec(self, func_cmd, pass_word="", pass_word_cnt=1, arg_list=[], tcId="", tcDesc="testpart", fail_check_word="", timeoutVal=1200000):
+        if isinstance(func_cmd, str):
+            fail_word = "%s FAILED" % func_cmd
+            if not tcId:
+                tcId = func_cmd
+            logging.info(f"BeginTestCase: {tcId} - {tcDesc}")
+            if func_cmd:
+                self.VmExec(func_cmd, timeoutVal=timeoutVal)
+            if pass_word:
+                if pass_word_cnt == 1:
+                    self.CheckResponse(pass_word, fail_word, exitOnFailure=True)
+                else:
+                    self.CheckResponse_cnt(pass_word, pass_word_cnt, fail_word, exitOnFailure=True)
+            if fail_check_word:
+                self.CheckNoResponse(fail_check_word, fail_word, exitOnFailure=True)
+            logging.info(f"EndTestCase")
+        else:
+            if not tcId:
+                tcId = func_cmd.__name__
+            logging.info(f"BeginTestCase: {tcId} - {tcDesc}")
+            result = func_cmd(*arg_list) if arg_list else func_cmd()
+            logging.info(f"EndTestCase")
+            return result
 
     @staticmethod
     def command_exists(cmd: str) -> bool:
