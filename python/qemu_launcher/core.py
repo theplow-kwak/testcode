@@ -23,6 +23,7 @@ from qemu_launcher.device.ssh import remove_ssh
 from qemu_launcher.device.disk_image import resolve_disk_to_images
 from qemu_launcher.device.pci import configure_pci_passthrough
 from qemu_launcher.device.uefi import configure_uefi
+from qemu_launcher.device.cdrom import configure_cdrom
 
 logger = set_logger("QEMU")
 
@@ -62,6 +63,7 @@ class QemuLauncher:
             configure_uefi(self.args, self.env, self.params)
             configure_kernel(self.args, self.kernel_args, self.args.images, self.args.arch, self.args.connect)
             configure_disks(self.args, self.params)
+            configure_cdrom(self.args, self.env, self.params)
             configure_nvme(self.args, self.env, self.params)
             configure_network(self.args, self.env, self.params)
             configure_spice(self.args, self.env, self.params)
@@ -127,6 +129,28 @@ class QemuLauncher:
             raise RuntimeError("No boot image provided")
         self.env["boot"] = self.args.images[0]
         self.env["boot_type"] = "1" if self.env["boot"].startswith("nvme") else ""
+        self.env["vmname"] = Path(self.env["boot"]).stem
+
+    def _detect_boot_image(self):
+        if not self.args.images:
+            raise RuntimeError("No boot image provided")
+
+        self.env["disks"] = []
+        self.env["cdroms"] = []
+
+        for img in self.args.images:
+            if img.lower().endswith(".iso"):
+                self.env["cdroms"].append(img)
+            else:
+                self.env["disks"].append(img)
+
+        if self.env["disks"]:
+            self.env["boot"] = self.env["disks"][0]
+        elif self.env["cdroms"]:
+            self.env["boot"] = self.env["cdroms"][0]
+        else:
+            raise RuntimeError("No valid disk or CD-ROM image provided")
+
         self.env["vmname"] = Path(self.env["boot"]).stem
 
     def _generate_identifiers(self):
