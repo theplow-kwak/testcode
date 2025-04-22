@@ -17,10 +17,13 @@ def configure_virtiofs(args, env, params, sudo_prefix, terminal_prefix):
 
     virtiofsd_cmd = sudo_prefix + terminal_prefix + [f"{virtiofs_bin} --socket-path={sock_path} -o source={env['home']}"]
 
-    run_command(virtiofsd_cmd)
-    while not Path(sock_path).exists():
-        logger.debug(f"Waiting for {sock_path}")
-        sleep(1)
+    if args.debug == "cmd":
+        print(" ".join(virtiofsd_cmd))
+    else:
+        run_command(virtiofsd_cmd)
+        while not Path(sock_path).exists():
+            logger.debug(f"Waiting for {sock_path}")
+            sleep(1)
 
     params += [
         f"-chardev socket,id=char{env['uid']},path={sock_path}",

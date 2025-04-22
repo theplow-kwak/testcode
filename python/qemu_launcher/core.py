@@ -34,7 +34,7 @@ class QemuLauncher:
         self.kernel_args = []
         self.connect_info = {}
         self.env = {
-            "home": f"/home/{os.getlogin()}",
+            "home": str(Path.home()),
             "uid": None,
             "guid": None,
             "procid": None,
@@ -55,24 +55,24 @@ class QemuLauncher:
         self._set_memory_size()
         self._resolve_paths()
         self._configure_base_devices()
-
-        configure_usb(self.args.arch, self.args, self.params, index=0)
-        configure_kernel(self.args, self.kernel_args, self.args.images, self.args.arch, self.args.connect)
-        configure_disks(self.args, self.params)
-        configure_nvme(self.args, self.env, self.params)
-        configure_network(self.args, self.env, self.params)
-        configure_spice(self.env, self.params)
-        configure_virtiofs(self.args, self.env, self.params, self._sudo(), self._term("--geometry=80x24+5+5"))
-        if self.args.tpm:
-            configure_tpm(self.env, self.params)
-        configure_usb_storage(self.args, self.params)
-        configure_pci_passthrough(self.args, self.params)
-        configure_connection(self.args, self.env, self.opts, self.connect_info)
-
-        if self.args.ext:
-            import shlex
-
-            self.params += shlex.split(self.args.ext)
+        if self._find_proc(self.env["procid"]):
+            configure_network(self.args, self.env, self.params)
+            configure_connection(self.args, self.env, self.opts, self._term(), self.connect_info)
+        else:
+            configure_usb(self.args.arch, self.args, self.params, index=0)
+            configure_kernel(self.args, self.kernel_args, self.args.images, self.args.arch, self.args.connect)
+            configure_disks(self.args, self.params)
+            configure_nvme(self.args, self.env, self.params)
+            configure_network(self.args, self.env, self.params)
+            configure_spice(self.env, self.params)
+            configure_virtiofs(self.args, self.env, self.params, self._sudo(), self._term("--geometry=80x24+5+5"))
+            if self.args.tpm:
+                configure_tpm(self.env, self.params)
+            configure_usb_storage(self.args, self.params)
+            configure_pci_passthrough(self.args, self.params)
+            configure_connection(self.args, self.env, self.opts, self._term(), self.connect_info)
+            if self.args.ext:
+                self.params += shlex.split(self.args.ext)
 
         if self.args.rmssh:
             remove_ssh(self.args, self.env)
@@ -87,12 +87,12 @@ class QemuLauncher:
                 if result.returncode != 0:
                     logger.error("QEMU execution failed")
                     return
-                self._wait_and_connect()
-        else:
-            logger.info("QEMU already running, connecting only.")
-            self._wait_and_connect()
+        self._wait_and_connect()
 
     def _wait_and_connect(self):
+        if self.args.debug == "cmd":
+            print(" ".join(self.connect_info["command"]))
+            return
         if self.connect_info.get("method") == "ssh":
             self._wait_for_ssh(self.connect_info["target"], timeout=60)
         if self.connect_info.get("command"):
@@ -121,7 +121,7 @@ class QemuLauncher:
     def _parse_args(self):
         parser = build_parser()
         self.args = parser.parse_args()
-        logger.setLevel(self.args.debug.upper())
+        logger.setLevel("INFO" if self.args.debug == "cmd" else self.args.debug.upper())
 
     def _detect_boot_image(self):
         if not self.args.images:
@@ -144,9 +144,7 @@ class QemuLauncher:
         Path("/tmp").mkdir(parents=True, exist_ok=True)
 
     def _configure_base_devices(self):
-        self.params += [
-            f"-name {self.env['vmname']},process={self.env['procid']}"
-        ]
+        self.params += [f"-name {self.env['vmname']},process={self.env['procid']}"]
         if self.args.ext:
             self.params += shlex.split(self.args.ext)
 
@@ -165,7 +163,7 @@ class QemuLauncher:
                 params.append(f"-smbios type=1,manufacturer={self.args.vender},product='{self.args.vender} Notebook PC'")
             self.opts.append(f"-vga {self.args.vga}")
             return params
-        
+
         arch_params = {
             "riscv64": ["-machine virt -bios none"],
             "arm": ["-machine virt -cpu cortex-a53 -device ramfb"],
