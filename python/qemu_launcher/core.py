@@ -22,6 +22,7 @@ from qemu_launcher.device.usb_storage import configure_usb_storage
 from qemu_launcher.device.ssh import remove_ssh
 from qemu_launcher.device.disk_image import resolve_disk_to_images
 from qemu_launcher.device.pci import configure_pci_passthrough
+from qemu_launcher.device.uefi import configure_uefi
 
 logger = set_logger("QEMU")
 
@@ -53,21 +54,20 @@ class QemuLauncher:
         self._detect_boot_image()
         self._generate_identifiers()
         self._set_memory_size()
-        self._resolve_paths()
         self._configure_base_devices()
         if self._find_proc(self.env["procid"]):
             configure_network(self.args, self.env, self.params)
             configure_connection(self.args, self.env, self.opts, self._term(), self.connect_info)
         else:
-            configure_usb(self.args.arch, self.args, self.params, index=0)
+            configure_uefi(self.args, self.env, self.params)
             configure_kernel(self.args, self.kernel_args, self.args.images, self.args.arch, self.args.connect)
             configure_disks(self.args, self.params)
             configure_nvme(self.args, self.env, self.params)
             configure_network(self.args, self.env, self.params)
-            configure_spice(self.env, self.params)
+            configure_spice(self.args, self.env, self.params)
             configure_virtiofs(self.args, self.env, self.params, self._sudo(), self._term("--geometry=80x24+5+5"))
-            if self.args.tpm:
-                configure_tpm(self.env, self.params)
+            configure_tpm(self.args, self.env, self.params)
+            configure_usb(self.args.arch, self.args, self.params, index=0)
             configure_usb_storage(self.args, self.params)
             configure_pci_passthrough(self.args, self.params)
             configure_connection(self.args, self.env, self.opts, self._term(), self.connect_info)
@@ -105,18 +105,17 @@ class QemuLauncher:
             if result.returncode == 0:
                 return True
             timeout -= 1
-            time.sleep(1)
+            time.sleep(5)
         logger.warning("SSH connection timed out")
         return False
 
     def _find_proc(self, name, timeout=0):
-        while timeout >= 0:
-            result = run_command(f"ps -C {name}")
-            if result.returncode == 0:
-                return True
+        while run_command(f"ps -C {name}").returncode:
+            if timeout <= 0:
+                return False
             timeout -= 1
-            time.sleep(1)
-        return False
+            time.sleep(5)
+        return True
 
     def _parse_args(self):
         parser = build_parser()
@@ -127,6 +126,7 @@ class QemuLauncher:
         if not self.args.images:
             raise RuntimeError("No boot image provided")
         self.env["boot"] = self.args.images[0]
+        self.env["boot_type"] = "1" if self.env["boot"].startswith("nvme") else ""
         self.env["vmname"] = Path(self.env["boot"]).stem
 
     def _generate_identifiers(self):
@@ -139,9 +139,6 @@ class QemuLauncher:
     def _set_memory_size(self):
         phy_mem = int(os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") / (1024 * 1024 * 1000))
         self.env["memsize"] = "8G" if phy_mem > 8 else "4G"
-
-    def _resolve_paths(self):
-        Path("/tmp").mkdir(parents=True, exist_ok=True)
 
     def _configure_base_devices(self):
         self.params += [f"-name {self.env['vmname']},process={self.env['procid']}"]
@@ -161,7 +158,8 @@ class QemuLauncher:
             ]
             if not self.args.hvci and self.args.vender:
                 params.append(f"-smbios type=1,manufacturer={self.args.vender},product='{self.args.vender} Notebook PC'")
-            self.opts.append(f"-vga {self.args.vga}")
+            if self.args.connect != "ssh":
+                self.opts.append(f"-vga {self.args.vga}")
             return params
 
         arch_params = {

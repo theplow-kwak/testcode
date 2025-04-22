@@ -1,4 +1,6 @@
-def configure_spice(env, params):
+def configure_spice(args, env, params):
+    if args.connect != "spice":
+        return
     spice_port = env["spice_port"]
     params += [
         f"-spice port={spice_port},disable-ticketing=on",
