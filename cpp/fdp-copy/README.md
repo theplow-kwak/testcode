@@ -57,3 +57,20 @@ bash복사편집sudo ./fdp_copy_super_benchmark_libnvme_allin \
 - CPU Affinity 적용
 - 결과는 `result.csv` 저장
 
+
+
+
+
+## 예시 실행
+
+```
+bash복사편집sudo ./fdp_copy \
+  --threads 4 --qdepth 8 \
+  --range 4 --count 100 \
+  --src-lba 0 --dst-lba 100000 \
+  --random --quiet
+```
+
+------
+
+## 

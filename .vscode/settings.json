@@ -3,5 +3,8 @@
         "--line-length",
         "180"
     ],
-    "cmake.sourceDirectory": "/workspaces/testcode/cpp/filter"
+    "cmake.sourceDirectory": "/workspaces/testcode/cpp/filter",
+    "files.associations": {
+        "libnvme.h": "c"
+    }
 }
