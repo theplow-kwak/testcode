@@ -1,6 +1,7 @@
 import logging
 import os
 import re
+import shlex
 import subprocess
 from typing import Optional
 
@@ -46,14 +47,14 @@ class CommandRunner:
 
     def run_command(self, cmd: str, ignoreError=None) -> Optional[str]:
         """Run a shell command and handle errors."""
-        cmd = f"{self.sudo_cmd}{cmd}"
+        cmd = shlex.split(cmd)
         ignoreError = ignoreError or self.ignoreError
         try:
             logging.debug(f"Executing command: {cmd}")
             if self.background:
-                subprocess.Popen(cmd, shell=True)
+                subprocess.Popen(cmd)
                 return None
-            result = subprocess.run(cmd, shell=True, text=True, stdout=subprocess.PIPE if self.return_stdout else None, stderr=subprocess.PIPE)
+            result = subprocess.run(cmd, text=True, stdout=subprocess.PIPE if self.return_stdout else None, stderr=subprocess.PIPE)
             self.returncode = result.returncode
             if result.returncode != 0 and not ignoreError:
                 raise RuntimeError(f"Command failed: {cmd}\nError: {result.stderr}")
@@ -63,6 +64,11 @@ class CommandRunner:
             if not ignoreError:
                 raise RuntimeError(f"Error executing command: {cmd}\n{e}")
             return None
+
+    def sudo_run(self, cmd: str, ignoreError=None) -> Optional[str]:
+        """Run a shell command with sudo and handle errors."""
+        cmd = f"{self.sudo_cmd}{cmd}"
+        return self.run_command(cmd, ignoreError=ignoreError)
 
     def VmExec(self, cmd: str, ignoreError: bool = True) -> str:
         return self.run_command(cmd, ignoreError=ignoreError)
