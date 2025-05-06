@@ -687,7 +687,7 @@ static int fdp_feature(int argc, char **argv, struct command *cmd, struct plugin
     return err;
 }
 
-#define COPY_CHUNK_SIZE 99
+#define COPY_CHUNK_SIZE 64
 
 struct async_copy_task
 {
@@ -707,118 +707,26 @@ void *copy_worker(void *arg)
         pthread_mutex_lock(&task->lock);
         while (!task->assigned)
         {
-            if (nvme_cfg.verbose)
-                printf("Worker waiting for task assignment...\n");
+            printf("Worker waiting for task assignment...\n");
             pthread_cond_wait(&task->cond, &task->lock);
         }
-        if (nvme_cfg.verbose)
-            printf("Worker assigned a task. sdlba %lld, nr %d\n", task->args.sdlba, task->args.nr);
+        printf("Worker assigned a task. sdlba %lld, nr %ld\n", task->args.sdlba, task->args.nr);
 
         task->assigned = 0;
         pthread_mutex_unlock(&task->lock);
+
+        // 실제 NVMe Copy 명령 실행
+        printf("Executing NVMe Copy command...\n");
         task->result = nvme_copy(&task->args);
+        printf("NVMe Copy command execution completed with result: %d\n", task->result);
+
         pthread_mutex_lock(&task->lock);
         task->done = 1;
         pthread_cond_signal(&task->cond);
+        printf("Worker marked task as done and signaled condition.\n");
         pthread_mutex_unlock(&task->lock);
     }
     return NULL;
-}
-
-static inline void fdp_init_copy_range_elbt(__u8 *elbt, __u64 eilbrt)
-{
-    int i;
-
-    for (i = 0; i < 8; i++)
-        elbt[9 - i] = (eilbrt >> (8 * i)) & 0xff;
-    elbt[1] = 0;
-    elbt[0] = 0;
-}
-
-static __u64 fdp_init_copy_range(struct nvme_copy_range *copy, __u64 *nlbs,
-                                 __u64 *slbas, __u32 *eilbrts, __u32 *elbatms,
-                                 __u32 *elbats, __u16 nr, __u16 chunk, __u64 offset)
-{
-    int i;
-    __u64 nlb_total = 0;
-
-    for (i = 0; i < nr; i++)
-    {
-        copy[i].nlb = min(cpu_to_le16(nlbs[i]), chunk);
-        copy[i].slba = cpu_to_le64(slbas[i]) + offset;
-        copy[i].eilbrt = cpu_to_le32(eilbrts[i]);
-        copy[i].elbatm = cpu_to_le16(elbatms[i]);
-        copy[i].elbat = cpu_to_le16(elbats[i]);
-        nlb_total += copy[i].nlb;
-        nlbs[i] -= copy[i].nlb;
-    }
-    return nlb_total;
-}
-
-static __u64 fdp_init_copy_range_f1(struct nvme_copy_range_f1 *copy, __u64 *nlbs,
-                                    __u64 *slbas, __u64 *eilbrts, __u32 *elbatms,
-                                    __u32 *elbats, __u16 nr, __u16 chunk, __u64 offset)
-{
-    int i;
-    __u64 nlb_total = 0;
-
-    for (i = 0; i < nr; i++)
-    {
-        copy[i].nlb = min(cpu_to_le16(nlbs[i]), chunk);
-        copy[i].slba = cpu_to_le64(slbas[i]) + offset;
-        copy[i].elbatm = cpu_to_le16(elbatms[i]);
-        copy[i].elbat = cpu_to_le16(elbats[i]);
-        fdp_init_copy_range_elbt(copy[i].elbt, eilbrts[i]);
-        nlb_total += copy[i].nlb;
-        nlbs[i] -= copy[i].nlb;
-    }
-    return nlb_total;
-}
-
-static __u64 fdp_init_copy_range_f2(struct nvme_copy_range_f2 *copy, __u32 *snsids,
-                                    __u64 *nlbs, __u64 *slbas, __u16 *sopts,
-                                    __u32 *eilbrts, __u32 *elbatms, __u32 *elbats,
-                                    __u16 nr, __u16 chunk, __u64 offset)
-{
-    int i;
-    __u64 nlb_total = 0;
-
-    for (i = 0; i < nr; i++)
-    {
-        copy[i].snsid = cpu_to_le32(snsids[i]);
-        copy[i].nlb = min(cpu_to_le16(nlbs[i]), chunk);
-        copy[i].slba = cpu_to_le64(slbas[i]) + offset;
-        copy[i].sopt = cpu_to_le16(sopts[i]);
-        copy[i].eilbrt = cpu_to_le32(eilbrts[i]);
-        copy[i].elbatm = cpu_to_le16(elbatms[i]);
-        copy[i].elbat = cpu_to_le16(elbats[i]);
-        nlb_total += copy[i].nlb;
-        nlbs[i] -= copy[i].nlb;
-    }
-    return nlb_total;
-}
-
-static __u64 fdp_init_copy_range_f3(struct nvme_copy_range_f3 *copy, __u32 *snsids,
-                                    __u64 *nlbs, __u64 *slbas, __u16 *sopts,
-                                    __u64 *eilbrts, __u32 *elbatms, __u32 *elbats,
-                                    __u16 nr, __u16 chunk, __u64 offset)
-{
-    int i;
-    __u64 nlb_total = 0;
-
-    for (i = 0; i < nr; i++)
-    {
-        copy[i].snsid = cpu_to_le32(snsids[i]);
-        copy[i].nlb = min(cpu_to_le16(nlbs[i]), chunk);
-        copy[i].slba = cpu_to_le64(slbas[i]) + offset;
-        copy[i].sopt = cpu_to_le16(sopts[i]);
-        copy[i].elbatm = cpu_to_le16(elbatms[i]);
-        copy[i].elbat = cpu_to_le16(elbats[i]);
-        fdp_init_copy_range_elbt(copy[i].elbt, eilbrts[i]);
-        nlb_total += copy[i].nlb;
-        nlbs[i] -= copy[i].nlb;
-    }
-    return nlb_total;
 }
 
 static int copy_cmd(int argc, char **argv, struct command *cmd, struct plugin *plugin)
@@ -862,6 +770,14 @@ static int copy_cmd(int argc, char **argv, struct command *cmd, struct plugin *p
 
     __u32 elbatms[256] = {0};
     __u32 elbats[256] = {0};
+
+    union
+    {
+        struct nvme_copy_range f0[256];
+        struct nvme_copy_range_f1 f1[256];
+        struct nvme_copy_range_f2 f2[256];
+        struct nvme_copy_range_f3 f3[256];
+    } *copy;
 
     struct config
     {
@@ -931,7 +847,6 @@ static int copy_cmd(int argc, char **argv, struct command *cmd, struct plugin *p
         OPT_SHRT("dir-spec", 'S', &cfg.dspec, d_dspec),
         OPT_BYTE("format", 'F', &cfg.format, d_format),
         OPT_INT("qdepth", 'Q', &cfg.qdepth, d_qdepth),
-        OPT_INCR("verbose", 'v', &nvme_cfg.verbose, verbose),
         OPT_END()};
 
     err = parse_and_open(&dev, argc, argv, desc, opts);
@@ -978,11 +893,6 @@ static int copy_cmd(int argc, char **argv, struct command *cmd, struct plugin *p
         nvme_show_error("formats 0 and 1 do not support cross-namespace copy");
         return -EINVAL;
     }
-    if (!nr || nr > 256)
-    {
-        nvme_show_error("invalid range");
-        return -EINVAL;
-    }
 
     if (!cfg.namespace_id)
     {
@@ -994,91 +904,71 @@ static int copy_cmd(int argc, char **argv, struct command *cmd, struct plugin *p
         }
     }
 
-    long long remain = 0;
-    for (int i = 0; i < nr; ++i)
-    {
-        remain += nlbs[i];
-    }
-
-    int chunk_size = COPY_CHUNK_SIZE / nr;
+    int chunk_size = COPY_CHUNK_SIZE;
     int qdepth = cfg.qdepth;
+    int remain = nb;
     int off = 0;
     int ret = 0;
     int submitted = 0, completed = 0;
-    int inflight = 0;
-
-    size_t copy_size = 0;
-    if (cfg.format == 0)
-        copy_size = sizeof(struct nvme_copy_range) * nr;
-    else if (cfg.format == 1)
-        copy_size = sizeof(struct nvme_copy_range_f1) * nr;
-    else if (cfg.format == 2)
-        copy_size = sizeof(struct nvme_copy_range_f2) * nr;
-    else if (cfg.format == 3)
-        copy_size = sizeof(struct nvme_copy_range_f3) * nr;
-
-    void **copy_buffers = calloc(qdepth, sizeof(void *));
-    if (!copy_buffers)
-    {
-        nvme_show_error("memory alloc failed");
-        return -ENOMEM;
-    }
-    for (int i = 0; i < qdepth; ++i)
-    {
-        copy_buffers[i] = nvme_alloc(copy_size);
-        if (!copy_buffers[i])
-        {
-            nvme_show_error("memory alloc failed");
-            for (int j = 0; j < i; ++j)
-                free(copy_buffers[j]);
-            free(copy_buffers);
-            return -ENOMEM;
-        }
-    }
 
     struct async_copy_task *tasks = calloc(qdepth, sizeof(struct async_copy_task));
     pthread_t *threads = calloc(qdepth, sizeof(pthread_t));
     if (!tasks || !threads)
     {
         nvme_show_error("memory alloc failed");
-        for (int i = 0; i < qdepth; ++i)
-            free(copy_buffers[i]);
-        free(copy_buffers);
         return -ENOMEM;
     }
-
     for (int i = 0; i < qdepth; ++i)
     {
         pthread_mutex_init(&tasks[i].lock, NULL);
         pthread_cond_init(&tasks[i].cond, NULL);
         tasks[i].assigned = 0;
         tasks[i].done = 0;
-        tasks[i].args.copy = copy_buffers[i];
         pthread_create(&threads[i], NULL, copy_worker, &tasks[i]);
     }
 
     while (remain > 0 || completed < submitted)
     {
-        for (int i = 0; i < qdepth && remain > 0 && inflight < qdepth; ++i)
+        // 1. 할당 가능한 빈 스레드 찾기
+        for (int i = 0; i < qdepth && remain > 0; ++i)
         {
             pthread_mutex_lock(&tasks[i].lock);
+            if (!tasks[i].assigned && tasks[i].done)
+            {
+                pthread_mutex_unlock(&tasks[i].lock);
+                continue;
+            }
             if (!tasks[i].assigned && !tasks[i].done)
             {
+                // 새 chunk 할당
                 int this_chunk = (remain > chunk_size) ? chunk_size : remain;
-                int copyed = 0;
+                void *chunk_copy = nvme_alloc(sizeof(*copy));
+                if (!chunk_copy)
+                {
+                    pthread_mutex_unlock(&tasks[i].lock);
+                    ret = -ENOMEM;
+                    break;
+                }
                 if (cfg.format == 0)
-                    copyed = fdp_init_copy_range((struct nvme_copy_range *)copy_buffers[i], nlbs, slbas, eilbrts.short_pi, elbatms, elbats, nr, this_chunk, off);
+                    fdp_init_copy_range((struct nvme_copy_range *)chunk_copy, &nlbs[off], &slbas[off], &eilbrts.short_pi[off], &elbatms[off], &elbats[off], this_chunk);
                 else if (cfg.format == 1)
-                    copyed = fdp_init_copy_range_f1((struct nvme_copy_range_f1 *)copy_buffers[i], nlbs, slbas, eilbrts.long_pi, elbatms, elbats, nr, this_chunk, off);
+                    fdp_init_copy_range_f1((struct nvme_copy_range_f1 *)chunk_copy, &nlbs[off], &slbas[off], &eilbrts.long_pi[off], &elbatms[off], &elbats[off], this_chunk);
                 else if (cfg.format == 2)
-                    copyed = fdp_init_copy_range_f2((struct nvme_copy_range_f2 *)copy_buffers[i], snsids, nlbs, slbas, sopts, eilbrts.short_pi, elbatms, elbats, nr, this_chunk, off);
+                    fdp_init_copy_range_f2((struct nvme_copy_range_f2 *)chunk_copy, &snsids[off], &nlbs[off], &slbas[off], &sopts[off], &eilbrts.short_pi[off], &elbatms[off], &elbats[off], this_chunk);
                 else if (cfg.format == 3)
-                    copyed = fdp_init_copy_range_f3((struct nvme_copy_range_f3 *)copy_buffers[i], snsids, nlbs, slbas, sopts, eilbrts.long_pi, elbatms, elbats, nr, this_chunk, off);
+                    fdp_init_copy_range_f3((struct nvme_copy_range_f3 *)chunk_copy, &snsids[off], &nlbs[off], &slbas[off], &sopts[off], &eilbrts.long_pi[off], &elbatms[off], &elbats[off], this_chunk);
+                else
+                {
+                    pthread_mutex_unlock(&tasks[i].lock);
+                    nvme_show_error("invalid format");
+                    ret = -EINVAL;
+                    break;
+                }
                 tasks[i].args = (struct nvme_copy_args){
                     .args_size = sizeof(tasks[i].args),
                     .fd = dev_fd(dev),
                     .nsid = cfg.namespace_id,
-                    .copy = copy_buffers[i],
+                    .copy = chunk_copy,
                     .sdlba = cfg.sdlba + off,
                     .nr = nr,
                     .prinfor = cfg.prinfor,
@@ -1098,52 +988,42 @@ static int copy_cmd(int argc, char **argv, struct command *cmd, struct plugin *p
                 tasks[i].done = 0;
                 pthread_cond_signal(&tasks[i].cond);
                 pthread_mutex_unlock(&tasks[i].lock);
-                remain -= copyed;
-                off += copyed;
+                remain -= this_chunk;
+                off += this_chunk;
                 submitted++;
-                inflight++;
-                if (nvme_cfg.verbose)
-                    printf("[copy] submit: chunk=%d remain=%lld off=%d inflight=%d\n", copyed, remain, off, inflight);
             }
             else
             {
                 pthread_mutex_unlock(&tasks[i].lock);
             }
         }
+        // 2. 완료된 작업 수집
         for (int i = 0; i < qdepth; ++i)
         {
             pthread_mutex_lock(&tasks[i].lock);
             if (tasks[i].done)
             {
+                // 결과 처리 (에러 체크 등)
                 if (tasks[i].result < 0)
                 {
-                    nvme_show_error("NVMe Copy: %s", nvme_strerror(errno));
+                    nvme_show_error("NVMe Copy: %s", nvme_strerror(-tasks[i].result));
                     ret = tasks[i].result;
                 }
-                else if (tasks[i].result != 0)
-                {
-                    nvme_show_status(tasks[i].result);
-                    ret = tasks[i].result;
-                }
+                free(tasks[i].args.copy);
                 tasks[i].done = 0;
                 completed++;
-                inflight--;
-                if (nvme_cfg.verbose)
-                    printf("[copy] complete: completed=%d inflight=%d\n", completed, inflight);
             }
             pthread_mutex_unlock(&tasks[i].lock);
         }
     }
-
+    // 스레드 종료 및 정리
     for (int i = 0; i < qdepth; ++i)
     {
         pthread_cancel(threads[i]);
         pthread_join(threads[i], NULL);
         pthread_mutex_destroy(&tasks[i].lock);
         pthread_cond_destroy(&tasks[i].cond);
-        free(copy_buffers[i]);
     }
-    free(copy_buffers);
     free(tasks);
     free(threads);
     if (!ret)

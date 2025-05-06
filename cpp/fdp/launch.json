@@ -1,0 +1,86 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "(gdb) Launch nvmecli",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/.build/nvme",
+            "args": [
+                "fdp", "copy", "/dev/nvme0n1", "--format=0", "--sdlba=100", "--blocks=99", "--slbs=0"
+            ],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}/.build",
+            "externalConsole": false,
+            "miDebuggerPath": "${workspaceFolder}/.vscode/gdb.sh",
+            "MIMode": "gdb",
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing for gdb",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                },
+                {
+                    "description": "Set Disassembly Flavor to Intel",
+                    "text": "-gdb-set disassembly-flavor intel",
+                    "ignoreFailures": true
+                }
+            ],
+            "sourceFileMap": {
+                "/host/projects/nvme-cli/": "/home/test/projects/nvme-cli/"
+            },
+            "environment": [
+                {
+                    "name": "LD_LIBRARY_PATH",
+                    "value": "${workspaceFolder}/.build/lib64"
+                }
+            ]
+        },
+        {
+            "name": "(gdb) Launch nvmecli as root",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/.build/nvme",
+            "args": [
+                "fdp", "copy", "/dev/nvme0n1", "--format=0", "--sdlba=0", "--blocks=99000", "--slbs=100,200,300,400"
+            ],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}/.build",
+            "externalConsole": false,
+            "MIMode": "gdb",
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing for gdb",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                },
+                {
+                    "description": "Set Disassembly Flavor to Intel",
+                    "text": "-gdb-set disassembly-flavor intel",
+                    "ignoreFailures": true
+                }
+            ],
+            // "sourceFileMap": {
+            //     "/host/projects/nvme-cli/": "/home/test/projects/nvme-cli/"
+            // },
+            "environment": [
+                {
+                    "name": "LD_LIBRARY_PATH",
+                    "value": "${workspaceFolder}/.build/lib64"
+                }
+            ]
+        },
+        {
+            "name": "C/C++: cl.exe luncher active file",
+            "type": "cppvsdbg",
+            "request": "launch",
+            "program": "${fileDirname}\\${fileBasenameNoExtension}.exe",
+            "args": ["--opt1", "test", "--opt2", "45"],
+            "stopAtEntry": false,
+            "cwd": "${fileDirname}",
+            "environment": [],
+            "console": "externalTerminal",
+            "preLaunchTask": "C/C++: cl.exe build active file"
+        }
+    ]
+}
