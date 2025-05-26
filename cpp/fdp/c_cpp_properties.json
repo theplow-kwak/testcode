@@ -18,14 +18,11 @@
             "name": "Linux",
             "includePath": [
                 "${workspaceFolder}/**",
-                "${workspaceFolder}/Tools/DAL/Development/src/nvme/include",
-                "${workspaceFolder}/Tools/3rd-party/**",
-                "${workspaceFolder}/Tools/3rd-party/expected-lite/include",
-                "/opt/qt_5.15.5/**",
-                "/home/test/.conan/data/fmt/8.1.1/_/_/source/src/include",
-                "/opt/rh/**"		
+                "/usr/include/**"
             ],
-            "defines": [],
+            "defines": [
+                "_GNU_SOURCE"
+            ],
             "compilerPath": "/usr/bin/gcc",
             "cStandard": "c17",
             "cppStandard": "c++17",

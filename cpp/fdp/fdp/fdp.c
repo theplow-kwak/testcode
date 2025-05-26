@@ -687,11 +687,12 @@ static int fdp_feature(int argc, char **argv, struct command *cmd, struct plugin
     return err;
 }
 
-#define COPY_CHUNK_SIZE 99
+#define COPY_CHUNK_SIZE 2048
 
 struct async_copy_task
 {
     struct nvme_copy_args args;
+    int id;
     int result;
     int assigned;
     int done;
@@ -740,17 +741,19 @@ static __u64 fdp_init_copy_range(struct nvme_copy_range *copy, __u64 *nlbs,
                                  __u32 *elbats, __u16 nr, __u16 chunk, __u64 offset)
 {
     int i;
+    int nlb = 0;
     __u64 nlb_total = 0;
 
     for (i = 0; i < nr; i++)
     {
-        copy[i].nlb = min(cpu_to_le16(nlbs[i]), chunk);
+        nlb = min(cpu_to_le16(nlbs[i]), chunk);
+        copy[i].nlb = nlb - 1;
         copy[i].slba = cpu_to_le64(slbas[i]) + offset;
         copy[i].eilbrt = cpu_to_le32(eilbrts[i]);
         copy[i].elbatm = cpu_to_le16(elbatms[i]);
         copy[i].elbat = cpu_to_le16(elbats[i]);
-        nlb_total += copy[i].nlb;
-        nlbs[i] -= copy[i].nlb;
+        nlb_total += nlb;
+        nlbs[i] -= nlb;
     }
     return nlb_total;
 }
@@ -821,6 +824,33 @@ static __u64 fdp_init_copy_range_f3(struct nvme_copy_range_f3 *copy, __u32 *snsi
     return nlb_total;
 }
 
+static __u64 time_get_ns(void)
+{
+    struct timespec ts;
+
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return ts.tv_sec * 1000000000ull + ts.tv_nsec;
+}
+
+static inline int identify_ns(int fd, __u32 nsid, void *data)
+{
+    struct nvme_identify_args args = {
+        .result = NULL,
+        .data = data,
+        .args_size = sizeof(args),
+        .fd = fd,
+        .timeout = NVME_DEFAULT_IOCTL_TIMEOUT,
+        .cns = NVME_IDENTIFY_CNS_NS,
+        .csi = NVME_CSI_NVM,
+        .nsid = nsid,
+        .cntid = NVME_CNTLID_NONE,
+        .cns_specific_id = NVME_CNSSPECID_NONE,
+        .uuidx = NVME_UUID_NONE,
+    };
+
+    return nvme_identify(&args);
+}
+
 static int copy_cmd(int argc, char **argv, struct command *cmd, struct plugin *plugin)
 {
     const char *desc = "The Copy command is used by the host to copy data\n"
@@ -844,9 +874,10 @@ static int copy_cmd(int argc, char **argv, struct command *cmd, struct plugin *p
     const char *d_dtype = "directive type (write part)";
     const char *d_dspec = "directive specific (write part)";
     const char *d_format = "source range entry format";
-    const char *d_qdepth = "io_uring queue depth (동시 처리 개수)";
+    const char *d_qdepth = "io_uring queue depth (number of concurrent requests)";
 
     _cleanup_nvme_dev_ struct nvme_dev *dev = NULL;
+    _cleanup_free_ struct nvme_id_ns *id_ns = NULL;
     __u16 nr, nb, ns, nrts, natms, nats, nids;
     __u64 nlbs[256] = {0};
     __u64 slbas[256] = {0};
@@ -885,6 +916,7 @@ static int copy_cmd(int argc, char **argv, struct command *cmd, struct plugin *p
         __u16 dspec;
         __u8 format;
         int qdepth;
+        int chunk;
     };
 
     struct config cfg = {
@@ -908,6 +940,7 @@ static int copy_cmd(int argc, char **argv, struct command *cmd, struct plugin *p
         .dspec = 0,
         .format = 0,
         .qdepth = 4,
+        .chunk = 256,
     };
 
     OPT_ARGS(opts) = {
@@ -930,6 +963,7 @@ static int copy_cmd(int argc, char **argv, struct command *cmd, struct plugin *p
         OPT_BYTE("dir-type", 'T', &cfg.dtype, d_dtype),
         OPT_SHRT("dir-spec", 'S', &cfg.dspec, d_dspec),
         OPT_BYTE("format", 'F', &cfg.format, d_format),
+        OPT_INT("chunk", 'c', &cfg.chunk, "chunk size"),
         OPT_INT("qdepth", 'Q', &cfg.qdepth, d_qdepth),
         OPT_INCR("verbose", 'v', &nvme_cfg.verbose, verbose),
         OPT_END()};
@@ -963,8 +997,6 @@ static int copy_cmd(int argc, char **argv, struct command *cmd, struct plugin *p
     nats = argconfig_parse_comma_sep_array_u32(cfg.elbats, elbats, ARRAY_SIZE(elbats));
 
     nr = max(nb, max(ns, max(nrts, max(natms, nats))));
-    printf("nr = %d, nb = %d, ns = %d, nids = %d, nrts = %d, natms = %d, nats = %d\n",
-           nr, nb, ns, nids, nrts, natms, nats);
     if (cfg.format == 2 || cfg.format == 3)
     {
         if (nr != nids)
@@ -978,12 +1010,6 @@ static int copy_cmd(int argc, char **argv, struct command *cmd, struct plugin *p
         nvme_show_error("formats 0 and 1 do not support cross-namespace copy");
         return -EINVAL;
     }
-    if (!nr || nr > 256)
-    {
-        nvme_show_error("invalid range");
-        return -EINVAL;
-    }
-
     if (!cfg.namespace_id)
     {
         err = nvme_get_nsid(dev_fd(dev), &cfg.namespace_id);
@@ -994,18 +1020,40 @@ static int copy_cmd(int argc, char **argv, struct command *cmd, struct plugin *p
         }
     }
 
-    long long remain = 0;
-    for (int i = 0; i < nr; ++i)
+    id_ns = nvme_alloc(sizeof(*id_ns));
+    if (!id_ns)
+        return -ENOMEM;
+
+    err = identify_ns(dev_fd(dev), cfg.namespace_id, id_ns);
+    if (err)
     {
-        remain += nlbs[i];
+        nvme_show_status(err);
+        return err;
     }
 
-    int chunk_size = COPY_CHUNK_SIZE / nr;
+    if (!nr || nr > id_ns->msrc + 1)
+    {
+        nvme_show_error("invalid range: nr(%d) cannot be greater than MSRC(%d)", nr, id_ns->msrc);
+        return -EINVAL;
+    }
+
+    long long remain = 0;
+    long long total_blocks = nlbs[0];
+    for (int i = 0; i < nr; ++i)
+    {
+        if (nlbs[i] < total_blocks)
+            nlbs[i] = total_blocks;
+        remain += nlbs[i];
+    }
+    total_blocks = remain;
+
+    int chunk_size = min(min(cfg.chunk, id_ns->mssrl), id_ns->mcl / nr);
     int qdepth = cfg.qdepth;
     int off = 0;
     int ret = 0;
     int submitted = 0, completed = 0;
     int inflight = 0;
+    __u64 time_tag = 0;
 
     size_t copy_size = 0;
     if (cfg.format == 0)
@@ -1053,9 +1101,13 @@ static int copy_cmd(int argc, char **argv, struct command *cmd, struct plugin *p
         pthread_cond_init(&tasks[i].cond, NULL);
         tasks[i].assigned = 0;
         tasks[i].done = 0;
-        tasks[i].args.copy = copy_buffers[i];
         pthread_create(&threads[i], NULL, copy_worker, &tasks[i]);
     }
+
+    if (nvme_cfg.verbose)
+        printf("[copy] fdp copy: sdlba=%lld total blocks=%lld chunk=%d\n", cfg.sdlba, remain, chunk_size);
+
+    time_tag = time_get_ns();
 
     while (remain > 0 || completed < submitted)
     {
@@ -1096,6 +1148,7 @@ static int copy_cmd(int argc, char **argv, struct command *cmd, struct plugin *p
                 };
                 tasks[i].assigned = 1;
                 tasks[i].done = 0;
+                tasks[i].id = submitted;
                 pthread_cond_signal(&tasks[i].cond);
                 pthread_mutex_unlock(&tasks[i].lock);
                 remain -= copyed;
@@ -1103,7 +1156,7 @@ static int copy_cmd(int argc, char **argv, struct command *cmd, struct plugin *p
                 submitted++;
                 inflight++;
                 if (nvme_cfg.verbose)
-                    printf("[copy] submit: chunk=%d remain=%lld off=%d inflight=%d\n", copyed, remain, off, inflight);
+                    printf("[copy] submit %d: sdlba=%lld blocks=%d remain=%lld inflight=%d\n", tasks[i].id, tasks[i].args.sdlba, copyed, remain, inflight);
             }
             else
             {
@@ -1129,11 +1182,24 @@ static int copy_cmd(int argc, char **argv, struct command *cmd, struct plugin *p
                 completed++;
                 inflight--;
                 if (nvme_cfg.verbose)
-                    printf("[copy] complete: completed=%d inflight=%d\n", completed, inflight);
+                    printf("[copy] complete %d: completed=%d inflight=%d\n", tasks[i].id, completed, inflight);
             }
             pthread_mutex_unlock(&tasks[i].lock);
         }
+        static __u64 last_time_tag = 0;
+        __u64 current_time_tag = time_get_ns();
+        if (current_time_tag - last_time_tag >= 3000000000) // 1초(1,000,000,000 ns) 경과
+        {
+            double elapsed_time = (current_time_tag - time_tag) / 1000000000.0;
+            double progress = (double)(total_blocks - remain) / total_blocks * 100;
+            printf("[copy] progress: %.2f%% completed: %lld/%lld submitted: %d inflight: %d elapsed time: %.2f s\n", progress, total_blocks - remain, total_blocks, submitted, inflight, elapsed_time);
+            last_time_tag = current_time_tag;
+        }
+        usleep(10); // 0.1초(100,000 ns) 쪼개서 스레드에서 다른 작업도 할 수 있도록 함
     }
+
+    time_tag = time_get_ns() - time_tag;
+    printf("  It took %lld blocks, %.3f seconds. %.2f MB/s\n", total_blocks, (float)time_tag / 1000000000, (total_blocks * 4096) / ((float)time_tag / 1000));
 
     for (int i = 0; i < qdepth; ++i)
     {
