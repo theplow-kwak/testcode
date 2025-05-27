@@ -31,17 +31,25 @@ public:
             flag_map_[short_name] = help;
     }
 
-    void add_positional(const std::string &name, const std::string &help = "", bool required = false)
+    // Add a positional argument with optional help, required flag, and default value
+    void add_positional(const std::string &name, const std::string &help = "", bool required = false, const std::string &default_value = "")
     {
-        positional_defs_.push_back(Positional{name, help, required, std::nullopt});
+        positional_defs_.emplace_back(Positional{name, help, required, default_value.empty() ? std::nullopt : std::make_optional(default_value)});
     }
 
+    // Parse command line arguments. Returns true if parsing is successful, false otherwise.
     bool parse(int argc, char *argv[])
     {
         size_t pos_idx = 0;
         for (int i = 1; i < argc; ++i)
         {
             std::string arg = argv[i];
+            if (arg == "--help" || arg == "-h")
+            {
+                // Print help and exit immediately if help option is provided
+                print_help(argv[0]);
+                return false;
+            }
             if (flag_map_.count(arg))
             {
                 parsed_flags_.insert(arg);
@@ -75,13 +83,19 @@ public:
                 }
             }
         }
-        // 옵션의 default value 적용
+        // Set default values for options if not set
         for (auto &[name, opt] : option_map_)
         {
             if (!opt.value.has_value() && opt.default_value.has_value())
                 opt.value = opt.default_value;
         }
-        // Check required options (long name만 체크)
+        // Set default values for positional arguments if not set
+        for (auto &pos : positional_defs_)
+        {
+            if (!pos.value.has_value() && pos.default_value.has_value())
+                pos.value = pos.default_value;
+        }
+        // Check required options (only long name)
         for (const auto &[name, opt] : option_map_)
         {
             if (!opt.long_name.empty() && opt.required && !opt.value.has_value())
@@ -91,7 +105,7 @@ public:
                 return false;
             }
         }
-        // Check required positional
+        // Check required positional arguments
         for (const auto &pos : positional_defs_)
         {
             if (pos.required && !pos.value.has_value())
@@ -147,16 +161,23 @@ public:
         return positional_args_;
     }
 
+    // Get positional argument value by name (returns default if not set)
     std::optional<std::string> get_positional(const std::string &name) const
     {
         for (const auto &pos : positional_defs_)
         {
-            if (pos.name == name && pos.value.has_value())
-                return pos.value;
+            if (pos.name == name)
+            {
+                if (pos.value.has_value())
+                    return pos.value;
+                if (pos.default_value.has_value())
+                    return pos.default_value;
+            }
         }
         return std::nullopt;
     }
 
+    // Print help message for usage and arguments
     void print_help(const std::string &prog_name) const
     {
         std::cout << "Usage: " << prog_name;
@@ -167,7 +188,7 @@ public:
         std::cout << " [options] [args...]\n";
         if (!description_.empty())
             std::cout << description_ << "\n\n";
-        // --- Positional arguments ---
+        // Print positional arguments
         if (!positional_defs_.empty())
         {
             std::cout << "Positional arguments:\n";
@@ -180,16 +201,17 @@ public:
                           << pos.help;
                 if (pos.required)
                     std::cout << " (required)";
+                if (pos.default_value.has_value())
+                    std::cout << " [default: " << *pos.default_value << "]";
                 std::cout << "\n";
             }
-            std::cout << "\n";
         }
         // --- Options & Flags ---
         std::cout << "Options:\n";
         std::unordered_set<std::string> printed;
         std::vector<std::pair<std::string, std::string>> all_list;
         size_t maxlen = 0;
-        // 옵션
+        // Options
         for (const auto &[name, opt] : option_map_)
         {
             if (!opt.long_name.empty() && printed.insert(opt.long_name).second)
@@ -204,7 +226,7 @@ public:
                 maxlen = std::max(maxlen, optstr.size());
             }
         }
-        // 플래그
+        // Flags
         printed.clear();
         for (const auto &[name, help] : flag_map_)
         {
@@ -220,7 +242,7 @@ public:
             all_list.emplace_back(flagstr, help);
             maxlen = std::max(maxlen, flagstr.size());
         }
-        // 출력
+        // Print all options and flags
         for (const auto &p : all_list)
         {
             std::cout << "  " << std::left << std::setw(static_cast<int>(maxlen) + 2) << p.first << p.second << "\n";
@@ -228,6 +250,7 @@ public:
     }
 
 private:
+    // Option structure for named arguments
     struct Option
     {
         std::string help;
@@ -237,14 +260,16 @@ private:
         std::string short_name;
         std::optional<std::string> default_value;
     };
+    // Positional argument structure
     struct Positional
     {
         std::string name;
         std::string help;
         bool required;
         std::optional<std::string> value;
+        std::optional<std::string> default_value;
     };
-    std::string description_;
+    std::string description_; // Program description
     std::unordered_map<std::string, Option> option_map_;
     std::unordered_map<std::string, std::string> flag_map_;
     std::vector<std::string> positional_args_;
@@ -252,20 +277,22 @@ private:
     std::vector<Positional> positional_defs_;
 };
 
-std::vector<std::string> split(const std::string& s, char delimiter) {
+std::vector<std::string> split(const std::string &s, char delimiter)
+{
     std::vector<std::string> tokens;
     std::string token;
     std::istringstream tokenStream(s);
-    while (std::getline(tokenStream, token, delimiter)) {
+    while (std::getline(tokenStream, token, delimiter))
+    {
         tokens.push_back(token);
     }
     return tokens;
 }
 
-// 사용 예시 (main 함수 등에서)
+// Usage example (in main function, etc.)
 // int main(int argc, char *argv[])
 // {
-//     ArgParser parser("샘플 프로그램: 파일을 입력받아 출력합니다.");
+//     ArgParser parser("Sample program: Accepts input file and outputs it.");
 //     parser.add_option("--file", "-f", "input file", true);
 //     parser.add_flag("--help", "-h", "show help");
 //     parser.add_positional("input", "input file", true);

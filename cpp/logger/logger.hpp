@@ -6,7 +6,6 @@
 #include <sstream>
 #include <iomanip>
 
-// 로그 레벨 정의
 enum class LogLevel
 {
     Debug,
@@ -64,7 +63,9 @@ public:
 private:
     LogLevel level_;
     std::mutex mutex_;
-    std::string level_to_string(LogLevel level)
+
+    // Convert LogLevel enum to string
+    static std::string level_to_string(LogLevel level)
     {
         switch (level)
         {
@@ -80,36 +81,36 @@ private:
             return "UNKNOWN";
         }
     }
-    // 간단한 포매팅 함수: '{}'를 인자 순서대로 치환
-    void replace_first(std::string &str, const std::string &from, const std::string &to)
+
+    // Replace the first occurrence of 'from' with 'to' in 'str'
+    static void replace_first(std::string &str, const std::string &from, const std::string &to)
     {
         size_t start_pos = str.find(from);
         if (start_pos != std::string::npos)
             str.replace(start_pos, from.length(), to);
     }
+
+    // Format a string by replacing '{}' with arguments (recursively)
     template <typename T, typename... Args>
-    std::string format(const std::string &fmt_str, T &&value, Args &&...args)
+    static std::string format(const std::string &fmt_str, T &&value, Args &&...args)
     {
         std::ostringstream oss;
         oss << std::forward<T>(value);
         std::string result = fmt_str;
         replace_first(result, "{}", oss.str());
         if constexpr (sizeof...(args) > 0)
-        {
             return format(result, std::forward<Args>(args)...);
-        }
         else
-        {
             return result;
-        }
     }
-    std::string format(const std::string &fmt_str)
+
+    // Base case for format recursion
+    static std::string format(const std::string &fmt_str)
     {
         return fmt_str;
     }
 };
 
-// 사용 예시 (main 함수 등에서)
 // int main()
 // {
 //     Logger logger(LogLevel::Debug);

@@ -32,7 +32,7 @@ int main(int argc, char *argv[])
         logger.info("Destination path: {}", dest);
     }
     logger.info("Starting copy and compare test...");
-    // 여기에 복사 및 비교 로직을 추가합니다.
+
     logger.info("Copy and compare test completed.");
     return 0;
 }
