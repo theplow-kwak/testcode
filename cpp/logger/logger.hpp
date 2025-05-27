@@ -110,7 +110,8 @@ private:
 };
 
 // 사용 예시 (main 함수 등에서)
-// int main() {
+// int main()
+// {
 //     Logger logger(LogLevel::Debug);
 //     logger.info("Hello, {}!", "world");
 //     logger.debug("Value: {}", 42);
