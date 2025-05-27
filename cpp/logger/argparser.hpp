@@ -14,9 +14,9 @@ public:
 
     void set_description(const std::string &desc) { description_ = desc; }
 
-    void add_option(const std::string &long_name, const std::string &short_name = "", const std::string &help = "", bool required = false)
+    void add_option(const std::string &long_name, const std::string &short_name = "", const std::string &help = "", bool required = false, const std::string &default_value = "")
     {
-        Option opt{help, required, std::nullopt, long_name, short_name};
+        Option opt{help, required, std::nullopt, long_name, short_name, default_value.empty() ? std::nullopt : std::make_optional(default_value)};
         if (!long_name.empty())
             option_map_[long_name] = opt;
         if (!short_name.empty())
@@ -51,7 +51,6 @@ public:
                 if (i + 1 < argc)
                 {
                     option_map_[arg].value = argv[++i];
-                    // 동기화: long/short 모두 값 저장
                     if (!option_map_[arg].long_name.empty())
                         option_map_[option_map_[arg].long_name].value = option_map_[arg].value;
                     if (!option_map_[arg].short_name.empty())
@@ -60,6 +59,7 @@ public:
                 else
                 {
                     std::cerr << "Option '" << arg << "' requires a value.\n";
+                    print_help(argv[0]);
                     return false;
                 }
             }
@@ -75,12 +75,19 @@ public:
                 }
             }
         }
+        // 옵션의 default value 적용
+        for (auto &[name, opt] : option_map_)
+        {
+            if (!opt.value.has_value() && opt.default_value.has_value())
+                opt.value = opt.default_value;
+        }
         // Check required options (long name만 체크)
         for (const auto &[name, opt] : option_map_)
         {
             if (!opt.long_name.empty() && opt.required && !opt.value.has_value())
             {
-                std::cerr << "Missing required option: " << opt.long_name << "\n";
+                std::cerr << "Missing required option: " << opt.long_name << "\n\n";
+                print_help(argv[0]);
                 return false;
             }
         }
@@ -89,7 +96,8 @@ public:
         {
             if (pos.required && !pos.value.has_value())
             {
-                std::cerr << "Missing required positional argument: " << pos.name << "\n";
+                std::cerr << "Missing required positional argument: " << pos.name << "\n\n";
+                print_help(argv[0]);
                 return false;
             }
         }
@@ -118,8 +126,13 @@ public:
         };
         for (const auto &[k, v] : option_map_)
         {
-            if (match(k, v) && v.value.has_value())
-                return v.value;
+            if (match(k, v))
+            {
+                if (v.value.has_value())
+                    return v.value;
+                if (v.default_value.has_value())
+                    return v.default_value;
+            }
         }
         return std::nullopt;
     }
@@ -146,14 +159,14 @@ public:
 
     void print_help(const std::string &prog_name) const
     {
-        if (!description_.empty())
-            std::cout << description_ << "\n";
         std::cout << "Usage: " << prog_name;
         for (const auto &pos : positional_defs_)
         {
             std::cout << " <" << pos.name << ">";
         }
         std::cout << " [options] [args...]\n";
+        if (!description_.empty())
+            std::cout << description_ << "\n\n";
         // --- Positional arguments ---
         if (!positional_defs_.empty())
         {
@@ -169,6 +182,7 @@ public:
                     std::cout << " (required)";
                 std::cout << "\n";
             }
+            std::cout << "\n";
         }
         // --- Options & Flags ---
         std::cout << "Options:\n";
@@ -181,7 +195,11 @@ public:
             if (!opt.long_name.empty() && printed.insert(opt.long_name).second)
             {
                 std::string optstr = (opt.short_name.empty() ? "" : opt.short_name + ", ") + opt.long_name + " <value>";
-                std::string desc = opt.help + (opt.required ? " (required)" : "");
+                std::string desc = opt.help;
+                if (opt.required)
+                    desc += " (required)";
+                if (opt.default_value.has_value())
+                    desc += " [default: " + *opt.default_value + "]";
                 all_list.emplace_back(optstr, desc);
                 maxlen = std::max(maxlen, optstr.size());
             }
@@ -217,6 +235,7 @@ private:
         std::optional<std::string> value;
         std::string long_name;
         std::string short_name;
+        std::optional<std::string> default_value;
     };
     struct Positional
     {
@@ -232,6 +251,16 @@ private:
     std::unordered_set<std::string> parsed_flags_;
     std::vector<Positional> positional_defs_;
 };
+
+std::vector<std::string> split(const std::string& s, char delimiter) {
+    std::vector<std::string> tokens;
+    std::string token;
+    std::istringstream tokenStream(s);
+    while (std::getline(tokenStream, token, delimiter)) {
+        tokens.push_back(token);
+    }
+    return tokens;
+}
 
 // 사용 예시 (main 함수 등에서)
 // int main(int argc, char *argv[])
