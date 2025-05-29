@@ -10,10 +10,12 @@
 
 enum class LogLevel
 {
+    TRACE,
     DEBUG,
     INFO,
     WARNING,
-    ERROR
+    ERROR,
+    FATAL
 };
 
 class Logger
@@ -38,7 +40,9 @@ public:
     {
         std::string lvl = level_str;
         std::transform(lvl.begin(), lvl.end(), lvl.begin(), ::toupper);
-        if (lvl == "DEBUG")
+        if (lvl == "TRACE")
+            level_ = LogLevel::TRACE;
+        else if (lvl == "DEBUG")
             level_ = LogLevel::DEBUG;
         else if (lvl == "INFO")
             level_ = LogLevel::INFO;
@@ -46,6 +50,8 @@ public:
             level_ = LogLevel::WARNING;
         else if (lvl == "ERROR")
             level_ = LogLevel::ERROR;
+        else if (lvl == "FATAL")
+            level_ = LogLevel::FATAL;
         else
             level_ = LogLevel::INFO;
     }
@@ -102,10 +108,12 @@ public:
     }
 
     // Macro for logging with file and line info
-#define LOG_DEBUG(logger, fmt, ...) (logger).log_impl(LogLevel::DEBUG, fmt, __FILE__, __LINE__, ##__VA_ARGS__)
-#define LOG_INFO(logger, fmt, ...) (logger).log_impl(LogLevel::INFO, fmt, __FILE__, __LINE__, ##__VA_ARGS__)
+#define LOG_TRACE(logger, fmt, ...)   (logger).log_impl(LogLevel::TRACE,   fmt, __FILE__, __LINE__, ##__VA_ARGS__)
+#define LOG_DEBUG(logger, fmt, ...)   (logger).log_impl(LogLevel::DEBUG,   fmt, __FILE__, __LINE__, ##__VA_ARGS__)
+#define LOG_INFO(logger, fmt, ...)    (logger).log_impl(LogLevel::INFO,    fmt, __FILE__, __LINE__, ##__VA_ARGS__)
 #define LOG_WARNING(logger, fmt, ...) (logger).log_impl(LogLevel::WARNING, fmt, __FILE__, __LINE__, ##__VA_ARGS__)
-#define LOG_ERROR(logger, fmt, ...) (logger).log_impl(LogLevel::ERROR, fmt, __FILE__, __LINE__, ##__VA_ARGS__)
+#define LOG_ERROR(logger, fmt, ...)   (logger).log_impl(LogLevel::ERROR,   fmt, __FILE__, __LINE__, ##__VA_ARGS__)
+#define LOG_FATAL(logger, fmt, ...)   (logger).log_impl(LogLevel::FATAL,   fmt, __FILE__, __LINE__, ##__VA_ARGS__)
 
     template <typename... Args>
     void debug(const std::string &fmt_str, Args &&...args)
@@ -127,6 +135,16 @@ public:
     {
         log(LogLevel::ERROR, fmt_str, std::forward<Args>(args)...);
     }
+    template <typename... Args>
+    void trace(const std::string &fmt_str, Args &&...args)
+    {
+        log(LogLevel::TRACE, fmt_str, std::forward<Args>(args)...);
+    }
+    template <typename... Args>
+    void fatal(const std::string &fmt_str, Args &&...args)
+    {
+        log(LogLevel::FATAL, fmt_str, std::forward<Args>(args)...);
+    }
 
 private:
     LogLevel level_;
@@ -138,6 +156,8 @@ private:
     {
         switch (level)
         {
+        case LogLevel::TRACE:
+            return "TRACE";
         case LogLevel::DEBUG:
             return "DEBUG";
         case LogLevel::INFO:
@@ -146,6 +166,8 @@ private:
             return "WARNING";
         case LogLevel::ERROR:
             return "ERROR";
+        case LogLevel::FATAL:
+            return "FATAL";
         default:
             return "UNKNOWN";
         }
