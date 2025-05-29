@@ -57,14 +57,17 @@ public:
         std::lock_guard<std::mutex> lock(mutex_);
         auto now = std::chrono::system_clock::now();
         auto in_time_t = std::chrono::system_clock::to_time_t(now);
+        auto duration = now.time_since_epoch();
+        auto micros = std::chrono::duration_cast<std::chrono::microseconds>(duration).count() % 1000000;
         std::ostringstream time_ss;
         time_ss << std::put_time(std::localtime(&in_time_t), "%Y-%m-%d %H:%M:%S");
+        time_ss << "." << std::setfill('0') << std::setw(6) << micros;
         std::string level_str = level_to_string(msg_level);
         std::string msg = format(fmt_str, std::forward<Args>(args)...);
         if (file && line > 0)
-            std::cout << "[" << time_ss.str() << "][" << level_str << "][" << file << ":" << line << "] " << msg << std::endl;
+            std::cout << time_ss.str() << " [" << level_str << "][" << file << ":" << line << "] " << msg << std::endl;
         else
-            std::cout << "[" << time_ss.str() << "][" << level_str << "] " << msg << std::endl;
+            std::cout << time_ss.str() << " [" << level_str << "] " << msg << std::endl;
     }
 
     // Macro for logging with file and line info
