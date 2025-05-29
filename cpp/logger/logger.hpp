@@ -5,27 +5,52 @@
 #include <ctime>
 #include <sstream>
 #include <iomanip>
+#include <algorithm> // For std::transform
 
 enum class LogLevel
 {
-    Debug,
-    Info,
-    Warning,
-    Error
+    DEBUG,
+    INFO,
+    WARNING,
+    ERROR
 };
 
 class Logger
 {
 public:
-    Logger(LogLevel level = LogLevel::Info) : level_(level) {}
+    Logger(LogLevel level = LogLevel::INFO) : level_(level) {}
 
     void set_level(LogLevel level)
     {
         level_ = level;
     }
 
+    void set_level(const std::string &level_str)
+    {
+        std::string lvl = level_str;
+        std::transform(lvl.begin(), lvl.end(), lvl.begin(), ::toupper);
+        if (lvl == "DEBUG")
+            level_ = LogLevel::DEBUG;
+        else if (lvl == "INFO")
+            level_ = LogLevel::INFO;
+        else if (lvl == "WARNING")
+            level_ = LogLevel::WARNING;
+        else if (lvl == "ERROR")
+            level_ = LogLevel::ERROR;
+        else
+            level_ = LogLevel::INFO;
+    }
+
+    // Log with file name and line number (default: use macro)
     template <typename... Args>
     void log(LogLevel msg_level, const std::string &fmt_str, Args &&...args)
+    {
+        log_impl(msg_level, fmt_str, "", 0, std::forward<Args>(args)...);
+    }
+
+    // Log with file name and line number (used by macro)
+    template <typename... Args>
+    void log_impl(LogLevel msg_level, const std::string &fmt_str, const char *file, int line, Args &&...args)
     {
         if (msg_level < level_)
             return;
@@ -36,28 +61,37 @@ public:
         time_ss << std::put_time(std::localtime(&in_time_t), "%Y-%m-%d %H:%M:%S");
         std::string level_str = level_to_string(msg_level);
         std::string msg = format(fmt_str, std::forward<Args>(args)...);
-        std::cout << "[" << time_ss.str() << "][" << level_str << "] " << msg << std::endl;
+        if (file && line > 0)
+            std::cout << "[" << time_ss.str() << "][" << level_str << "][" << file << ":" << line << "] " << msg << std::endl;
+        else
+            std::cout << "[" << time_ss.str() << "][" << level_str << "] " << msg << std::endl;
     }
+
+    // Macro for logging with file and line info
+#define LOG_DEBUG(logger, fmt, ...) (logger).log_impl(LogLevel::DEBUG, fmt, __FILE__, __LINE__, ##__VA_ARGS__)
+#define LOG_INFO(logger, fmt, ...) (logger).log_impl(LogLevel::INFO, fmt, __FILE__, __LINE__, ##__VA_ARGS__)
+#define LOG_WARNING(logger, fmt, ...) (logger).log_impl(LogLevel::WARNING, fmt, __FILE__, __LINE__, ##__VA_ARGS__)
+#define LOG_ERROR(logger, fmt, ...) (logger).log_impl(LogLevel::ERROR, fmt, __FILE__, __LINE__, ##__VA_ARGS__)
 
     template <typename... Args>
     void debug(const std::string &fmt_str, Args &&...args)
     {
-        log(LogLevel::Debug, fmt_str, std::forward<Args>(args)...);
+        log(LogLevel::DEBUG, fmt_str, std::forward<Args>(args)...);
     }
     template <typename... Args>
     void info(const std::string &fmt_str, Args &&...args)
     {
-        log(LogLevel::Info, fmt_str, std::forward<Args>(args)...);
+        log(LogLevel::INFO, fmt_str, std::forward<Args>(args)...);
     }
     template <typename... Args>
     void warning(const std::string &fmt_str, Args &&...args)
     {
-        log(LogLevel::Warning, fmt_str, std::forward<Args>(args)...);
+        log(LogLevel::WARNING, fmt_str, std::forward<Args>(args)...);
     }
     template <typename... Args>
     void error(const std::string &fmt_str, Args &&...args)
     {
-        log(LogLevel::Error, fmt_str, std::forward<Args>(args)...);
+        log(LogLevel::ERROR, fmt_str, std::forward<Args>(args)...);
     }
 
 private:
@@ -69,13 +103,13 @@ private:
     {
         switch (level)
         {
-        case LogLevel::Debug:
+        case LogLevel::DEBUG:
             return "DEBUG";
-        case LogLevel::Info:
+        case LogLevel::INFO:
             return "INFO";
-        case LogLevel::Warning:
+        case LogLevel::WARNING:
             return "WARNING";
-        case LogLevel::Error:
+        case LogLevel::ERROR:
             return "ERROR";
         default:
             return "UNKNOWN";
