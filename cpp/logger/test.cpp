@@ -1,5 +1,6 @@
 #include "argparser.hpp"
 #include "logger.hpp"
+#include <thread>
 
 int main(int argc, char *argv[])
 {
@@ -34,6 +35,7 @@ int main(int argc, char *argv[])
     for (const auto &dest : destlist)
     {
         LOG_DEBUG(logger, "Destination path: {}", dest);
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
     logger.info("Starting copy and compare test...");
 

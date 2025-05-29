@@ -6,6 +6,7 @@
 #include <sstream>
 #include <iomanip>
 #include <algorithm> // For std::transform
+#include <fstream>   // For std::ofstream
 
 enum class LogLevel
 {
@@ -18,7 +19,15 @@ enum class LogLevel
 class Logger
 {
 public:
-    Logger(LogLevel level = LogLevel::INFO) : level_(level) {}
+    Logger(LogLevel level = LogLevel::INFO) : level_(level), file_stream_(nullptr) {}
+    ~Logger()
+    {
+        if (file_stream_)
+        {
+            file_stream_->close();
+            delete file_stream_;
+        }
+    }
 
     void set_level(LogLevel level)
     {
@@ -41,6 +50,22 @@ public:
             level_ = LogLevel::INFO;
     }
 
+    // Set log file. If path is empty, log to stdout only.
+    void set_logfile(const std::string &path)
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (file_stream_)
+        {
+            file_stream_->close();
+            delete file_stream_;
+            file_stream_ = nullptr;
+        }
+        if (!path.empty())
+        {
+            file_stream_ = new std::ofstream(path, std::ios::app);
+        }
+    }
+
     // Log with file name and line number (default: use macro)
     template <typename... Args>
     void log(LogLevel msg_level, const std::string &fmt_str, Args &&...args)
@@ -59,15 +84,21 @@ public:
         auto in_time_t = std::chrono::system_clock::to_time_t(now);
         auto duration = now.time_since_epoch();
         auto micros = std::chrono::duration_cast<std::chrono::microseconds>(duration).count() % 1000000;
+        int micro3 = static_cast<int>(micros / 1000); // 3 digits
         std::ostringstream time_ss;
         time_ss << std::put_time(std::localtime(&in_time_t), "%Y-%m-%d %H:%M:%S");
-        time_ss << "." << std::setfill('0') << std::setw(6) << micros;
+        time_ss << "." << std::setfill('0') << std::setw(3) << micro3;
         std::string level_str = level_to_string(msg_level);
         std::string msg = format(fmt_str, std::forward<Args>(args)...);
+        std::ostringstream out;
         if (file && line > 0)
-            std::cout << time_ss.str() << " [" << level_str << "][" << file << ":" << line << "] " << msg << std::endl;
+            out << time_ss.str() << " [" << level_str << "][" << file << ":" << line << "] " << msg << std::endl;
         else
-            std::cout << time_ss.str() << " [" << level_str << "] " << msg << std::endl;
+            out << time_ss.str() << " [" << level_str << "] " << msg << std::endl;
+        // Output to file if set
+        if (file_stream_ && file_stream_->is_open())
+            *file_stream_ << out.str();
+        std::cout << out.str();
     }
 
     // Macro for logging with file and line info
@@ -100,6 +131,7 @@ public:
 private:
     LogLevel level_;
     std::mutex mutex_;
+    std::ofstream *file_stream_ = nullptr;
 
     // Convert LogLevel enum to string
     static std::string level_to_string(LogLevel level)
