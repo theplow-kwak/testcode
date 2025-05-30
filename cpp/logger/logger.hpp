@@ -108,12 +108,12 @@ public:
     }
 
     // Macro for logging with file and line info
-#define LOG_TRACE(logger, fmt, ...)   (logger).log_impl(LogLevel::TRACE,   fmt, __FILE__, __LINE__, ##__VA_ARGS__)
-#define LOG_DEBUG(logger, fmt, ...)   (logger).log_impl(LogLevel::DEBUG,   fmt, __FILE__, __LINE__, ##__VA_ARGS__)
-#define LOG_INFO(logger, fmt, ...)    (logger).log_impl(LogLevel::INFO,    fmt, __FILE__, __LINE__, ##__VA_ARGS__)
+#define LOG_TRACE(logger, fmt, ...) (logger).log_impl(LogLevel::TRACE, fmt, __FILE__, __LINE__, ##__VA_ARGS__)
+#define LOG_DEBUG(logger, fmt, ...) (logger).log_impl(LogLevel::DEBUG, fmt, __FILE__, __LINE__, ##__VA_ARGS__)
+#define LOG_INFO(logger, fmt, ...) (logger).log_impl(LogLevel::INFO, fmt, __FILE__, __LINE__, ##__VA_ARGS__)
 #define LOG_WARNING(logger, fmt, ...) (logger).log_impl(LogLevel::WARNING, fmt, __FILE__, __LINE__, ##__VA_ARGS__)
-#define LOG_ERROR(logger, fmt, ...)   (logger).log_impl(LogLevel::ERROR,   fmt, __FILE__, __LINE__, ##__VA_ARGS__)
-#define LOG_FATAL(logger, fmt, ...)   (logger).log_impl(LogLevel::FATAL,   fmt, __FILE__, __LINE__, ##__VA_ARGS__)
+#define LOG_ERROR(logger, fmt, ...) (logger).log_impl(LogLevel::ERROR, fmt, __FILE__, __LINE__, ##__VA_ARGS__)
+#define LOG_FATAL(logger, fmt, ...) (logger).log_impl(LogLevel::FATAL, fmt, __FILE__, __LINE__, ##__VA_ARGS__)
 
     template <typename... Args>
     void debug(const std::string &fmt_str, Args &&...args)
