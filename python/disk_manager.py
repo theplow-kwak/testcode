@@ -4,7 +4,7 @@ import os
 import re
 from typing import Dict, List, Optional
 
-from command_runner import VM_LOG_MSG_TYPE_DEBUG, VM_LOG_MSG_TYPE_ERROR, VM_LOG_MSG_TYPE_WARN, VmCommon
+from command_runner import VM_LOG_MSG_TYPE_DEBUG, VM_LOG_MSG_TYPE_ERROR, VM_LOG_MSG_TYPE_WARN, CommandRunner, VmCommon
 
 logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
 
@@ -15,7 +15,7 @@ def get_base_disk(path: str) -> str:
     return path.rsplit("p", 1)[0] if basename.startswith("nvme") else re.sub(r"\d+$", "", basename)
 
 
-def resolve_disk_path(hostRoot, disk: str) -> str:
+def resolve_disk_path(hostRoot: CommandRunner, disk: str) -> str:
     """
     Resolve the full path of a disk and ensure it is a valid block device.
     If the input is a partition, return the corresponding base disk name.
@@ -36,7 +36,7 @@ def resolve_disk_path(hostRoot, disk: str) -> str:
     return base_disk if base_disk != disk and is_block_device(base_disk) else disk
 
 
-def list_available_disks(hostRoot) -> List[str]:
+def list_available_disks(hostRoot: CommandRunner) -> List[str]:
     """List all available disks that are not mounted."""
     output = hostRoot.VmExec("lsblk -P -e7 -dn -o NAME,TYPE,MOUNTPOINT")
     parsed_output = [{k: v.strip('"') for k, v in (item.split("=", 1) for item in line.split() if "=" in item)} for line in output.strip().splitlines()]
@@ -67,11 +67,11 @@ def convert_size_to_mb(size_str: str, total_mb: int) -> int:
     elif size_str.endswith("mb"):
         return int(float(size_str[:-2]))
     else:
-        raise int(size_str)
+        raise ValueError(f"Invalid size string: {size_str}")
 
 
 class DiskManager:
-    def __init__(self, hostRoot, disk: str, force: bool = False):
+    def __init__(self, hostRoot: CommandRunner, disk: str, force: bool = False):
         self.hostRoot = hostRoot
         self.disk = resolve_disk_path(self.hostRoot, disk)
         self.force = force  # Allow forced operations
@@ -143,7 +143,7 @@ class DiskManager:
         except Exception as e:
             VmCommon.LogMsg(f"Failed to create partition table: {e}", msgType=VM_LOG_MSG_TYPE_ERROR)
 
-    def create_partitions(self, partitions: List[Dict], force: bool = False):
+    def create_partitions(self, partitions: List[Dict[str, str]], force: bool = False):
         if not partitions:
             partitions = [{"size": "100%"}]
 
@@ -155,8 +155,8 @@ class DiskManager:
             start_mb = 1
             total_mb = self.get_disk_size_mib()
             for idx, part in enumerate(partitions):
-                part_type = part.get("type", "primary")
-                size_mb = convert_size_to_mb(part["size"], total_mb)
+                part_type: str = part.get("type", "primary")
+                size_mb: int = convert_size_to_mb(part["size"], total_mb)
                 end_mb = min(start_mb + size_mb, total_mb - 1)
                 self.hostRoot.VmExec(f"parted -s {self.disk} mkpart {part_type} {start_mb}MiB {end_mb}MiB")
                 start_mb = end_mb
@@ -246,7 +246,7 @@ class DiskManager:
         self.refresh_lsblk_info(refresh_partition=True)
         return True
 
-    def mount_partition(self, partition: str, mount_point: str = None):
+    def mount_partition(self, partition: str, mount_point: Optional[str] = None):
         """Mount a partition to a mount point."""
         if partition == get_base_disk(partition):
             logging.warning(f"Cannot mount the base disk {partition}. Please specify a partition.")
