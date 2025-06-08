@@ -9,7 +9,6 @@
 #include <linux/fs.h>
 #include <sys/stat.h>
 #include <string.h>
-#include <pthread.h>
 // #include <linux/nvme_uring.h>
 
 #include "common.h"
@@ -19,7 +18,7 @@
 #include "nvme-print.h"
 
 #define CREATE_CMD
-#include "fdp.h"
+#include "fdp_uring.h"
 
 static int fdp_configs(int argc, char **argv, struct command *cmd,
                        struct plugin *plugin)
@@ -814,41 +813,70 @@ static inline int identify_ns(int fd, __u32 nsid, void *data)
     return nvme_identify(&args);
 }
 
-struct async_copy_task
+static inline void io_uring_prep_uring_cmd(struct io_uring_sqe *sqe, int fd, void *cmd, unsigned int cmdlen, unsigned int flags)
 {
-    struct nvme_copy_args args;
-    int id;
-    int result;
-    int assigned;
-    int done;
-    pthread_mutex_t lock;
-    pthread_cond_t cond;
-};
+    sqe->opcode = IORING_OP_URING_CMD;
+    sqe->fd = fd;
+    sqe->off = 0;
+    sqe->addr = (unsigned long)cmd;
+    sqe->len = cmdlen;
+    sqe->uring_cmd_flags = flags;
+    sqe->cmd_op = NVME_URING_CMD_IO;
+}
 
-void *copy_worker(void *arg)
+static int nvme_copy_io_uring(struct io_uring *ring, struct nvme_copy_args *args)
 {
-    struct async_copy_task *task = (struct async_copy_task *)arg;
-    while (1)
+    struct io_uring_sqe *sqe = io_uring_get_sqe(ring);
+    if (!sqe)
+        return -1;
+
+    size_t data_len = 0;
+    if (args->format == 1)
+        data_len = args->nr * sizeof(struct nvme_copy_range_f1);
+    else if (args->format == 2)
+        data_len = args->nr * sizeof(struct nvme_copy_range_f2);
+    else if (args->format == 3)
+        data_len = args->nr * sizeof(struct nvme_copy_range_f3);
+    else
+        data_len = args->nr * sizeof(struct nvme_copy_range);
+
+    __u32 cdw3 = 0;
+    __u32 cdw12 = ((args->nr - 1) & 0xff) | ((args->format & 0xf) << 8) |
+                  ((args->prinfor & 0xf) << 12) | ((args->dtype & 0xf) << 20) |
+                  ((args->prinfow & 0xf) << 26) | ((args->fua & 0x1) << 30) |
+                  ((args->lr & 0x1) << 31);
+    __u32 cdw14 = 0;
+
+    if (args->args_size == sizeof_args(struct nvme_copy_args, format, __u64))
     {
-        pthread_mutex_lock(&task->lock);
-        while (!task->assigned)
-        {
-            if (nvme_cfg.verbose)
-                printf("Worker waiting for task assignment...\n");
-            pthread_cond_wait(&task->cond, &task->lock);
-        }
-        if (nvme_cfg.verbose)
-            printf("Worker assigned a task. sdlba %lld, nr %d\n", task->args.sdlba, task->args.nr);
-
-        task->assigned = 0;
-        pthread_mutex_unlock(&task->lock);
-        task->result = nvme_copy(&task->args);
-        pthread_mutex_lock(&task->lock);
-        task->done = 1;
-        pthread_cond_signal(&task->cond);
-        pthread_mutex_unlock(&task->lock);
+        cdw3 = 0;
+        cdw14 = args->ilbrt;
     }
-    return NULL;
+    else
+    {
+        cdw3 = (args->ilbrt_u64 >> 32) & 0xffffffff;
+        cdw14 = args->ilbrt_u64 & 0xffffffff;
+    }
+
+    struct nvme_uring_cmd *cmd = calloc(1, sizeof(struct nvme_uring_cmd));
+    if (!cmd)
+        return -1;
+
+    cmd->opcode = 0x19; // NVMe Copy opcode
+    cmd->nsid = args->nsid;
+    cmd->addr = (__u64)(uintptr_t)args->copy;
+    cmd->data_len = data_len;
+    cmd->cdw3 = cdw3;
+    cmd->cdw10 = args->sdlba & 0xffffffff;
+    cmd->cdw11 = args->sdlba >> 32;
+    cmd->cdw12 = cdw12;
+    cmd->cdw13 = (args->dspec & 0xffff) << 16;
+    cmd->cdw14 = cdw14;
+    cmd->cdw15 = (args->lbatm << 16) | args->lbat;
+
+    io_uring_prep_uring_cmd(sqe, args->fd, cmd, sizeof(*cmd), 0);
+    io_uring_sqe_set_data(sqe, cmd); // cmd 포인터 저장
+    return 0;
 }
 
 static int copy_cmd(int argc, char **argv, struct command *cmd, struct plugin *plugin)
@@ -1083,134 +1111,96 @@ static int copy_cmd(int argc, char **argv, struct command *cmd, struct plugin *p
         }
     }
 
-    struct async_copy_task *tasks = calloc(qdepth, sizeof(struct async_copy_task));
-    pthread_t *threads = calloc(qdepth, sizeof(pthread_t));
-    if (!tasks || !threads)
+    struct io_uring uring;
+
+    if (io_uring_queue_init(cfg.qdepth, &uring, 0) < 0)
     {
-        nvme_show_error("memory alloc failed");
-        for (int i = 0; i < qdepth; ++i)
-            free(copy_buffers[i]);
-        free(copy_buffers);
-        return -ENOMEM;
+        nvme_show_error("io_uring_queue_init failed");
+        return -1;
     }
 
-    for (int i = 0; i < qdepth; ++i)
+    while ((remain > 0 || inflight > 0) && ret == 0)
     {
-        pthread_mutex_init(&tasks[i].lock, NULL);
-        pthread_cond_init(&tasks[i].cond, NULL);
-        tasks[i].assigned = 0;
-        tasks[i].done = 0;
-        pthread_create(&threads[i], NULL, copy_worker, &tasks[i]);
-    }
-
-    if (nvme_cfg.verbose)
-        printf("[copy] fdp copy: sdlba=%lld total blocks=%lld chunk=%d\n", cfg.sdlba, remain, chunk_size);
-
-    time_tag = time_get_ns();
-
-    while (remain > 0 || completed < submitted)
-    {
-        for (int i = 0; i < qdepth && remain > 0 && inflight < qdepth; ++i)
+        int submitted_this_round = 0;
+        // submit
+        while (remain > 0 && inflight < cfg.qdepth)
         {
-            pthread_mutex_lock(&tasks[i].lock);
-            if (!tasks[i].assigned && !tasks[i].done)
+            int this_chunk = (remain > chunk_size) ? chunk_size : remain;
+            int copyed = 0;
+            int buffer_index = submitted % cfg.qdepth;
+            if (cfg.format == 0)
+                copyed = fdp_init_copy_range((struct nvme_copy_range *)copy_buffers[buffer_index], nlbs, slbas, eilbrts.short_pi, elbatms, elbats, nr, this_chunk, off);
+            else if (cfg.format == 1)
+                copyed = fdp_init_copy_range_f1((struct nvme_copy_range_f1 *)copy_buffers[buffer_index], nlbs, slbas, eilbrts.long_pi, elbatms, elbats, nr, this_chunk, off);
+            else if (cfg.format == 2)
+                copyed = fdp_init_copy_range_f2((struct nvme_copy_range_f2 *)copy_buffers[buffer_index], snsids, nlbs, slbas, sopts, eilbrts.short_pi, elbatms, elbats, nr, this_chunk, off);
+            else if (cfg.format == 3)
+                copyed = fdp_init_copy_range_f3((struct nvme_copy_range_f3 *)copy_buffers[buffer_index], snsids, nlbs, slbas, sopts, eilbrts.long_pi, elbatms, elbats, nr, this_chunk, off);
+            struct nvme_copy_args args = {
+                .args_size = sizeof(args),
+                .fd = dev_fd(dev),
+                .nsid = cfg.namespace_id,
+                .copy = copy_buffers[buffer_index],
+                .sdlba = cfg.sdlba + off,
+                .nr = nr,
+                .prinfor = cfg.prinfor,
+                .prinfow = cfg.prinfow,
+                .dtype = cfg.dtype,
+                .dspec = cfg.dspec,
+                .format = cfg.format,
+                .lr = cfg.lr,
+                .fua = cfg.fua,
+                .ilbrt_u64 = cfg.ilbrt,
+                .lbatm = cfg.lbatm,
+                .lbat = cfg.lbat,
+                .timeout = nvme_cfg.timeout,
+                .result = NULL,
+            };
+            printf("[io_uring] SUBMIT: fd=%d nsid=%u sdlba=0x%llx nr=%d chunk_size=%d remain=%lld off=%d\n",
+                   args.fd, args.nsid, (unsigned long long)args.sdlba, args.nr, this_chunk, remain, off);
+            if (nvme_copy_io_uring(&uring, &args) < 0)
             {
-                int this_chunk = (remain > chunk_size) ? chunk_size : remain;
-                int copyed = 0;
-                if (cfg.format == 0)
-                    copyed = fdp_init_copy_range((struct nvme_copy_range *)copy_buffers[i], nlbs, slbas, eilbrts.short_pi, elbatms, elbats, nr, this_chunk, off);
-                else if (cfg.format == 1)
-                    copyed = fdp_init_copy_range_f1((struct nvme_copy_range_f1 *)copy_buffers[i], nlbs, slbas, eilbrts.long_pi, elbatms, elbats, nr, this_chunk, off);
-                else if (cfg.format == 2)
-                    copyed = fdp_init_copy_range_f2((struct nvme_copy_range_f2 *)copy_buffers[i], snsids, nlbs, slbas, sopts, eilbrts.short_pi, elbatms, elbats, nr, this_chunk, off);
-                else if (cfg.format == 3)
-                    copyed = fdp_init_copy_range_f3((struct nvme_copy_range_f3 *)copy_buffers[i], snsids, nlbs, slbas, sopts, eilbrts.long_pi, elbatms, elbats, nr, this_chunk, off);
-                tasks[i].args = (struct nvme_copy_args){
-                    .args_size = sizeof(tasks[i].args),
-                    .fd = dev_fd(dev),
-                    .nsid = cfg.namespace_id,
-                    .copy = copy_buffers[i],
-                    .sdlba = cfg.sdlba + off,
-                    .nr = nr,
-                    .prinfor = cfg.prinfor,
-                    .prinfow = cfg.prinfow,
-                    .dtype = cfg.dtype,
-                    .dspec = cfg.dspec,
-                    .format = cfg.format,
-                    .lr = cfg.lr,
-                    .fua = cfg.fua,
-                    .ilbrt_u64 = cfg.ilbrt,
-                    .lbatm = cfg.lbatm,
-                    .lbat = cfg.lbat,
-                    .timeout = nvme_cfg.timeout,
-                    .result = NULL,
-                };
-                tasks[i].assigned = 1;
-                tasks[i].done = 0;
-                tasks[i].id = submitted;
-                pthread_cond_signal(&tasks[i].cond);
-                pthread_mutex_unlock(&tasks[i].lock);
-                remain -= copyed;
-                off += copyed;
-                submitted++;
-                inflight++;
-                if (nvme_cfg.verbose)
-                    printf("[copy] submit %d: sdlba=%lld blocks=%d remain=%lld inflight=%d\n", tasks[i].id, tasks[i].args.sdlba, copyed, remain, inflight);
+                printf("[io_uring] ERROR: submit failed\n");
+                nvme_show_error("nvme_copy_io_uring submit failed");
+                // free(chunk_copy);
+                ret = -1;
+                break;
             }
-            else
-            {
-                pthread_mutex_unlock(&tasks[i].lock);
-            }
+            inflight++;
+            submitted++;
+            submitted_this_round++;
+            remain -= this_chunk;
+            off += this_chunk;
         }
-        for (int i = 0; i < qdepth; ++i)
+        if (submitted_this_round > 0)
+            io_uring_submit(&uring);
+        if (ret)
+            break;
+        if (inflight == 0)
+            break;
+        // wait completion
+        struct io_uring_cqe *cqe;
+        if (io_uring_wait_cqe(&uring, &cqe) < 0)
         {
-            pthread_mutex_lock(&tasks[i].lock);
-            if (tasks[i].done)
-            {
-                if (tasks[i].result < 0)
-                {
-                    nvme_show_error("NVMe Copy: %s", nvme_strerror(errno));
-                    ret = tasks[i].result;
-                }
-                else if (tasks[i].result != 0)
-                {
-                    nvme_show_status(tasks[i].result);
-                    ret = tasks[i].result;
-                }
-                tasks[i].done = 0;
-                completed++;
-                inflight--;
-                if (nvme_cfg.verbose)
-                    printf("[copy] complete %d: completed=%d inflight=%d\n", tasks[i].id, completed, inflight);
-            }
-            pthread_mutex_unlock(&tasks[i].lock);
+            printf("[io_uring] ERROR: wait_cqe failed\n");
+            ret = -1;
+            break;
         }
-        static __u64 last_time_tag = 0;
-        __u64 current_time_tag = time_get_ns();
-        if (current_time_tag - last_time_tag >= 3000000000) // 1초(1,000,000,000 ns) 경과
+        void *chunk_copy = io_uring_cqe_get_data(cqe);
+        printf("[io_uring] COMPLETE: CQE res=%d\n", cqe->res);
+        io_uring_cqe_seen(&uring, cqe);
+        // free(chunk_copy);
+        if (cqe->res < 0)
         {
-            double elapsed_time = (current_time_tag - time_tag) / 1000000000.0;
-            double progress = (double)(total_blocks - remain) / total_blocks * 100;
-            printf("[copy] progress: %.2f%% completed: %lld/%lld submitted: %d inflight: %d elapsed time: %.2f s\n", progress, total_blocks - remain, total_blocks, submitted, inflight, elapsed_time);
-            last_time_tag = current_time_tag;
+            printf("[io_uring] ERROR: CQE error: %s\n", strerror(-cqe->res));
+            nvme_show_error("NVMe Copy CQE error: %s", strerror(-cqe->res));
+            ret = cqe->res;
+            break;
         }
-        usleep(10); // 0.1초(100,000 ns) 쪼개서 스레드에서 다른 작업도 할 수 있도록 함
+        inflight--;
+        completed++;
     }
-
-    time_tag = time_get_ns() - time_tag;
-    printf("  It took %lld blocks, %.3f seconds. %.2f MB/s\n", total_blocks, (float)time_tag / 1000000000, (total_blocks * 4096) / ((float)time_tag / 1000));
-
-    for (int i = 0; i < qdepth; ++i)
-    {
-        pthread_cancel(threads[i]);
-        pthread_join(threads[i], NULL);
-        pthread_mutex_destroy(&tasks[i].lock);
-        pthread_cond_destroy(&tasks[i].cond);
-        free(copy_buffers[i]);
-    }
-    free(copy_buffers);
-    free(tasks);
-    free(threads);
+    io_uring_queue_exit(&uring);
     if (!ret)
         printf("NVMe Copy: success\n");
     return ret;

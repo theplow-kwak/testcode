@@ -6,10 +6,10 @@ int main(int argc, char *argv[])
 {
     Logger logger(LogLevel::DEBUG);
     ArgParser parser("Copy and Compare test. ver. 0.1.0");
-    parser.add_option("--time", "-t", "test time (unit: min)");
+    parser.add_option("--time", "-t", "test time (unit: min)", false, "2");
     parser.add_option("--src", "-s", "source directory path", true);
     parser.add_option("--dest", "-d", "destination directory path", true);
-    parser.add_option("--thread", "-T", "thread count", false, "1");
+    parser.add_option("--thread", "-T", "thread count", false, "5");
     parser.add_flag("--test", "", "for test. used time unit as minute");
     parser.add_option("--log", "-L", "log level", false, "INFO");
     if (!parser.parse(argc, argv))
@@ -31,7 +31,7 @@ int main(int argc, char *argv[])
     logger.info("Thread count: {}", multithread);
     logger.info("Test mode: {}", test ? "enabled" : "disabled");
     logger.info("Test time: {} minutes", nTestTime);
-    logger.info("Destination count: {}", dest_count);
+    logger.debug("Destination count: {:d}", dest_count);
     for (const auto &dest : destlist)
     {
         LOG_DEBUG(logger, "Destination path: {}", dest);

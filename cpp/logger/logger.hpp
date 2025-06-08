@@ -90,10 +90,10 @@ public:
         auto in_time_t = std::chrono::system_clock::to_time_t(now);
         auto duration = now.time_since_epoch();
         auto micros = std::chrono::duration_cast<std::chrono::microseconds>(duration).count() % 1000000;
-        int micro3 = static_cast<int>(micros / 1000); // 3 digits
+        micros = static_cast<int>(micros / 1000); // 3 digits
         std::ostringstream time_ss;
         time_ss << std::put_time(std::localtime(&in_time_t), "%Y-%m-%d %H:%M:%S");
-        time_ss << "." << std::setfill('0') << std::setw(3) << micro3;
+        time_ss << "." << std::setfill('0') << std::setw(3) << micros;
         std::string level_str = level_to_string(msg_level);
         std::string msg = format(fmt_str, std::forward<Args>(args)...);
         std::ostringstream out;
