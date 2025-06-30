@@ -2,21 +2,21 @@
 
 import argparse
 import asyncio
+import datetime
 import json
 import logging
-import threading
 import time
+import threading
 
 from nats.aio.client import Client as NATS
 
-# 로깅 설정
 logging.basicConfig(level=logging.INFO, format="%(levelname)s - %(message)s")
-# logging.getLogger("nats").setLevel(logging.FATAL)
+logger = logging.getLogger(__name__)
 
 
 class NATSClient:
-    def __init__(self, server_url: str = "nats://localhost:4222"):
-        self.server_url = server_url
+    def __init__(self, server_ip: str = "localhost"):
+        self.server_url = f"nats://{server_ip}:4222"
         self.nc = NATS()
         self.loop = asyncio.new_event_loop()
         self.thread = threading.Thread(target=self._start_loop, daemon=True)
@@ -36,15 +36,15 @@ class NATSClient:
         for attempt in range(retries):
             try:
                 await self.nc.connect(servers=[self.server_url], error_cb=self._error_cb, allow_reconnect=False)
-                logging.info(f"Connected to NATS server attempt {attempt + 1} at {self.server_url}")
+                logger.info(f"Connected to NATS server attempt {attempt + 1} at {self.server_url}")
                 self.connected_event.set()
                 return
             except Exception as e:
-                logging.warning(f"NATS connection attempt {attempt + 1} failed: {e}")
+                logger.warning(f"NATS connection attempt {attempt + 1} failed: {e}")
                 await asyncio.sleep(delay)
 
         self.connected_event.clear()
-        logging.warning("NATS connection failed.")
+        logger.warning("NATS connection failed.")
 
     def is_connected(self):
         return self.nc.is_connected
@@ -68,7 +68,7 @@ class NATSClient:
             return
         self.loop.call_soon_threadsafe(asyncio.create_task, self._async_subscribe(subject, callback))
 
-    def heartbeat(self, subject: str, interval: int):
+    def heartbeat(self, subject: str, callback, interval: int):
         if not self.is_connected():
             return
 
@@ -76,29 +76,30 @@ class NATSClient:
             try:
                 while True:
                     await asyncio.sleep(interval)
-                    await self.nc.publish(subject, json.dumps({"toolType": "squid"}).encode())
-                    logging.debug(f"Heartbeat sent to {subject}")
+                    await self.nc.publish(subject, callback().encode())
+                    logger.debug(f"Heartbeat sent to {subject}")
             except asyncio.CancelledError:
-                logging.warning("[HEARTBEAT] Heartbeat task cancelled")
+                logger.warning("[HEARTBEAT] Heartbeat task cancelled")
 
-        def _start_heartbeat():
-            self.heartbeat_task = asyncio.create_task(_send_heartbeat())
-
-        self.loop.call_soon_threadsafe(_start_heartbeat)
+        self.loop.call_soon_threadsafe(asyncio.create_task, _send_heartbeat())
 
     async def _async_request(self, subject: str, message: str, timeout: int = 10):
         try:
             response = await self.nc.request(subject, message.encode(), timeout=timeout)
             return response.data.decode()
         except Exception as e:
-            logging.debug(f"Request to {subject} failed: {e}")
+            logger.debug(f"Request to {subject} failed: {e}")
             return None
 
     async def _async_subscribe(self, subject: str, callback):
         async def message_handler(msg):
-            response = callback(msg)
-            if response:
-                await msg.respond(response.encode())
+            data = msg.data.decode()
+            logger.debug(f">>> Received message on {msg.subject}: {data}")
+            if msg.reply:
+                response = callback(msg.subject, data)
+                if response:
+                    await msg.respond(response.encode())
+                    logger.debug(f"<<< Responded: {response}")
             await asyncio.sleep(0)
 
         await self.nc.subscribe(subject, cb=message_handler)
@@ -118,48 +119,86 @@ class NATSClient:
 
         self.loop.call_soon_threadsafe(asyncio.create_task, _shutdown())
         self.thread.join()
-        logging.debug("NATS connection closed")
+        logger.debug("NATS connection closed")
 
 
-def request_handler(msg):
-    data = msg.data.decode()
-    subject = msg.subject
-    if msg.reply:
-        print(f"Handling request on {subject} with data: {data}")
-        return f"Processed: {data}"
+test_start_time = datetime.datetime.now()
+test_step = 0
+test_loop = 5
+
+
+def request_handler(subject, data):
+    """Callback function to handle request message"""
+    parts = subject.split(".")
+    if len(parts) != 4:
+        return "Invalid subject format"
+    test_duration = datetime.datetime.now() - test_start_time
+    test_duration = test_duration.total_seconds()
+    hours, rest = divmod(test_duration, 3600)
+    minutes, seconds = divmod(rest, 60)
+    command = parts[3]
+    if command == "getTestProgressTime":
+        progress_data = {"testHours": int(hours), "testMinutes": int(minutes), "testSeconds": round(seconds, 3)}
+        return json.dumps(progress_data)
+    elif command == "getTestProgressCycle":
+        return json.dumps({"currentTestCycle": test_step + 1, "totalTestCycle": test_loop})
+    elif command == "getTestProgress":
+        progress_data = {
+            "mode": "cycle" if test_loop > 1 else "time",
+            "currentTestCycle": test_step + 1,
+            "totalTestCycle": test_loop,
+            "testHours": int(hours),
+            "testMinutes": int(minutes),
+            "testSeconds": round(seconds, 3),
+        }
+        return json.dumps(progress_data)
     else:
-        print(f"Received published message on {subject} with data: {data}")
-        return None
+        return "Unknown command"
+
+
+def heartbeat_handler():
+    return json.dumps({"toolType": "squid.test.client"})
 
 
 def main():
     parser = argparse.ArgumentParser(description="NATS Client")
-    parser.add_argument("-s", "--server", type=str, default="nats://localhost:4222", help="NATS server address")
+    parser.add_argument("-s", "--server", type=str, default="localhost", help="NATS server address")
+    parser.add_argument("-c", "--client", help="Used client mode for testing", action="store_true")
+    parser.add_argument("-l", "--log", type=str, default="info", help="Set logging level (debug, info, warning, error, critical)")
     args = parser.parse_args()
+    logger.setLevel(args.log.upper())
 
-    nats_client = NATSClient(server_url=args.server)
+    nats_client = NATSClient(server_ip=args.server)
 
     nats_client.wait_until_ready(timeout=10)
     if not nats_client.is_connected():
-        logging.warning("Initial connection failed. Continuing...")
+        logger.warning("Initial connection failed. Continuing...")
         nats_client.close()
 
-    nats_client.subscribe("srv.*.*.*", request_handler)
-    nats_client.heartbeat("client.test.system.heartbeat", 5)
+    if args.client:
+        server_name = "squid"
+        client_name = "cero.test"
+    else:
+        server_name = "cero"
+        client_name = "squid.test"
+
+    nats_client.subscribe(f"{server_name}.*.*.*", request_handler)
+    if args.client:
+        nats_client.heartbeat(f"{client_name}.system.heartbeat", heartbeat_handler, 10)
 
     step = 0
     try:
         while True:
-            subjects = ["client.test.dut.getTestProgressCycle", "client.test.dut.getTestProgressTime", "client.test.dut.getTestProgress"]
-            subject = subjects[step % len(subjects)]
-            step += 1
+            if not args.client:
+                subjects = [f"{client_name}.dut.getTestProgressCycle", f"{client_name}.dut.getTestProgressTime", f"{client_name}.dut.getTestProgress"]
+                subject = subjects[step % len(subjects)]
+                step += 1
+                response = nats_client.request(subject, "Request data")
+                if response:
+                    print(f"Main received response: {response}")
+            else:
+                nats_client.publish(f"{client_name}.dut.sendTestProgressTime", "Hello from publisher!")
 
-            response = nats_client.request(subject, "Request data")
-            if response:
-                print(f"Main received response: {response}")
-
-            nats_client.publish("client.test.dut.sendTestProgressTime", "Hello from publisher!")
-            print("Main routine working...")
             time.sleep(2)
 
     except KeyboardInterrupt:
