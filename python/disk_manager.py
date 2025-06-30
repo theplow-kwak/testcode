@@ -252,10 +252,11 @@ class DiskManager:
             logging.warning(f"Cannot mount the base disk {partition}. Please specify a partition.")
             return ""
         partition_info = self.partition_info.get(partition, {})
-        if mountpoint := partition_info.get("MOUNTPOINT", ""):
+        mountpoint = partition_info.get("MOUNTPOINT", "")
+        if mountpoint:
             logging.warning(f"{partition} is already mounted at {mountpoint}. Skipping mount.")
             return mountpoint
-        mount_path = mount_point or f"/root/mnt/{partition}_{partition_info.get("FSTYPE", "")}"
+        mount_path = f"{mount_point}/{partition}_{partition_info.get("FSTYPE", "UNKNOWN")}"
         self.hostRoot.VmExec(f"mkdir -p {mount_path}", ignoreError=True)
         if not partition.startswith("/dev/"):
             partition = f"/dev/{partition}"
