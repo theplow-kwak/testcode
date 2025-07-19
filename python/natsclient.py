@@ -100,6 +100,8 @@ class NATSClient:
                 if response:
                     await msg.respond(response.encode())
                     logger.debug(f"<<< Responded: {response}")
+            else:
+                logger.info(f"Received message on {msg.subject}: {data}")
             await asyncio.sleep(0)
 
         await self.nc.subscribe(subject, cb=message_handler)
@@ -137,7 +139,10 @@ def request_handler(subject, data):
     hours, rest = divmod(test_duration, 3600)
     minutes, seconds = divmod(rest, 60)
     command = parts[3]
-    if command == "getTestProgressTime":
+    if command == "setResult":
+        logger.info(f"Received result on {subject}: {data}")
+        return json.dumps({"Thanks": f"{subject}", "for": f"{data}"})
+    elif command == "getTestProgressTime":
         progress_data = {"testHours": int(hours), "testMinutes": int(minutes), "testSeconds": round(seconds, 3)}
         return json.dumps(progress_data)
     elif command == "getTestProgressCycle":
