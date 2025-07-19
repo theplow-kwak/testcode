@@ -1,10 +1,13 @@
 #include "argparser.hpp"
 #include "logger.hpp"
 #include <thread>
+#include <locale>
 
 int main(int argc, char *argv[])
 {
     Logger logger(LogLevel::DEBUG);
+    std::locale::global(std::locale(""));
+
     ArgParser parser("Copy and Compare test. ver. 0.1.0");
     parser.add_option("--time", "-t", "test time (unit: min)", false, "2");
     parser.add_option("--src", "-s", "source directory path", true);
@@ -26,12 +29,12 @@ int main(int argc, char *argv[])
     auto log_level = parser.get("log").value();
     logger.set_level(log_level);
 
-    logger.info("Source: {}", source);
+    logger.info("Source: {:>10}", source);
     LOG_INFO(logger, "Destination: {}", parser.get("dest").value());
     logger.info("Thread count: {}", multithread);
     logger.info("Test mode: {}", test ? "enabled" : "disabled");
-    logger.info("Test time: {} minutes", nTestTime);
-    logger.debug("Destination count: {:d}", dest_count);
+    logger.info("Test time: {:L} minutes", nTestTime);
+    logger.debug("Destination count: {:04d}", dest_count);
     for (const auto &dest : destlist)
     {
         LOG_DEBUG(logger, "Destination path: {}", dest);

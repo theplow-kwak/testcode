@@ -269,7 +269,7 @@ private:
         std::optional<std::string> value;
         std::optional<std::string> default_value;
     };
-    std::string description_; // Program description
+    std::string description_;
     std::unordered_map<std::string, Option> option_map_;
     std::unordered_map<std::string, std::string> flag_map_;
     std::vector<std::string> positional_args_;
@@ -288,27 +288,3 @@ std::vector<std::string> split(const std::string &s, char delimiter)
     }
     return tokens;
 }
-
-// Usage example (in main function, etc.)
-// int main(int argc, char *argv[])
-// {
-//     ArgParser parser("Sample program: Accepts input file and outputs it.");
-//     parser.add_option("--file", "-f", "input file", true);
-//     parser.add_flag("--help", "-h", "show help");
-//     parser.add_positional("input", "input file", true);
-//     parser.add_positional("output", "output file", false);
-//     if (!parser.parse(argc, argv) || parser.is_set("--help") || parser.is_set("-h"))
-//     {
-//         parser.print_help(argv[0]);
-//         return 1;
-//     }
-//     auto file = parser.get("--file");
-//     if (file)
-//         std::cout << "File: " << *file << std::endl;
-//     auto input = parser.get_positional("input");
-//     auto output = parser.get_positional("output");
-//     if (input)
-//         std::cout << "Input: " << *input << std::endl;
-//     if (output)
-//         std::cout << "Output: " << *output << std::endl;
-// }
