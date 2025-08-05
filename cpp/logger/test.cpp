@@ -3,10 +3,18 @@
 #include <thread>
 #include <locale>
 
+const char *formatWithCommas(unsigned long number)
+{
+    std::string number_str = std::to_string(number);
+    for (int i = number_str.length() - 3; i > 0; i -= 3)
+        number_str.insert(i, ",");
+    return number_str.c_str();
+}
+
 int main(int argc, char *argv[])
 {
     Logger logger(LogLevel::DEBUG);
-    std::locale::global(std::locale(""));
+    // std::locale::global(std::locale(""));
 
     ArgParser parser("Copy and Compare test. ver. 0.1.0");
     parser.add_option("--time", "-t", "test time (unit: min)", false, "2");
@@ -33,7 +41,8 @@ int main(int argc, char *argv[])
     LOG_INFO(logger, "Destination: {}", parser.get("dest").value());
     logger.info("Thread count: {}", multithread);
     logger.info("Test mode: {}", test ? "enabled" : "disabled");
-    logger.info("Test time: {:L} minutes", nTestTime);
+    logger.info("Test time: {} minutes", formatWithCommas(nTestTime));
+    printf("Test time: {%s} minutes\n", formatWithCommas(nTestTime));
     logger.debug("Destination count: {:04d}", dest_count);
     for (const auto &dest : destlist)
     {

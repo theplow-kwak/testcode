@@ -16,7 +16,7 @@
             "type": "cppdbg",
             "request": "launch",
             "program": "${fileDirname}\\${fileBasenameNoExtension}",
-            "args": ["--time", "5", "--test", "--src", "util", "--dest", "cnc_test_0,cnc_test_1,cnc_test_2,cnc_test_3"],
+            "args": ["~/vm/ubuntu/noble.qcow2", "./test.img", "10000"],
             "stopAtEntry": false,
             "cwd": "${fileDirname}",
             "environment": [],
@@ -34,6 +34,37 @@
                     "ignoreFailures": true
                 }
             ]
+        },
+        {
+            "name": "(gdb) Launch clive",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/.build/clive",
+            "args": [
+                "fdp", "multi-nsr", "/dev/nvme0", "--nsid", "1", "--slba", "0", "--nlb", "5000", "--lr", "0", "--bs", "256", "-v"
+            ],
+            "stopAtEntry": true,
+            "cwd": "${workspaceFolder}/.build",
+            "externalConsole": false,
+            "miDebuggerPath": "/usr/bin/gdb",
+            "MIMode": "gdb",
+            "pipeTransport": {
+                "debuggerPath": "/usr/bin/gdb",
+                "pipeProgram": "sudo",
+                "pipeArgs": ["-E", "bash", "-c"],
+            },
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing for gdb",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                },
+                {
+                    "description": "Set Disassembly Flavor to Intel",
+                    "text": "-gdb-set disassembly-flavor intel",
+                    "ignoreFailures": true
+                }
+            ],
         }
     ]
 }

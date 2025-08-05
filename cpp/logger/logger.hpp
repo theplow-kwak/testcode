@@ -3,13 +3,11 @@
 #include <string>
 #include <mutex>
 #include <chrono>
-#include <ctime>
 #include <sstream>
-#include <iomanip>
-#include <algorithm> // For std::transform
-#include <fstream>   // For std::ofstream
-#include <tuple>     // For std::tuple
-#include <utility>   // For std::apply and std::forward
+#include <algorithm>
+#include <fstream>
+#include <tuple>
+#include <utility>
 
 enum class LogLevel
 {
@@ -127,19 +125,19 @@ public:
 #define LOG_FATAL(logger, fmt, ...) (logger).log_impl(LogLevel::FATAL, fmt, __FILE__, __LINE__, ##__VA_ARGS__)
 
     template <typename... Args>
+    void trace(const std::string &fmt_str, Args &&...args) { log(LogLevel::TRACE, fmt_str, std::forward<Args>(args)...); }
+    template <typename... Args>
     void debug(const std::string &fmt_str, Args &&...args) { log(LogLevel::DEBUG, fmt_str, std::forward<Args>(args)...); }
     template <typename... Args>
     void info(const std::string &fmt_str, Args &&...args) { log(LogLevel::INFO, fmt_str, std::forward<Args>(args)...); }
+    template <typename... Args>
+    void step(const std::string &fmt_str, Args &&...args) { log(LogLevel::STEP, fmt_str, std::forward<Args>(args)...); }
     template <typename... Args>
     void warning(const std::string &fmt_str, Args &&...args) { log(LogLevel::WARNING, fmt_str, std::forward<Args>(args)...); }
     template <typename... Args>
     void error(const std::string &fmt_str, Args &&...args) { log(LogLevel::ERROR, fmt_str, std::forward<Args>(args)...); }
     template <typename... Args>
-    void trace(const std::string &fmt_str, Args &&...args) { log(LogLevel::TRACE, fmt_str, std::forward<Args>(args)...); }
-    template <typename... Args>
     void fatal(const std::string &fmt_str, Args &&...args) { log(LogLevel::FATAL, fmt_str, std::forward<Args>(args)...); }
-    template <typename... Args>
-    void step(const std::string &fmt_str, Args &&...args) { log(LogLevel::STEP, fmt_str, std::forward<Args>(args)...); }
 
 private:
     LogLevel level_;
