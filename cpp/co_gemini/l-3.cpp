@@ -1,3 +1,6 @@
+#include "util/argparser.hpp"
+#include "util/logger.hpp"
+
 #include <iostream>
 #include <vector>
 #include <string>
@@ -11,18 +14,18 @@
 #include <liburing.h>
 #include <libnvme.h>
 
-#ifndef IORING_OP_NVME_CMD
-#define IORING_OP_NVME_CMD 19
-#endif
+/* io_uring async commands: */
+#define NVME_URING_CMD_IO _IOWR('N', 0x80, struct nvme_uring_cmd)
+#define NVME_URING_CMD_IO_VEC _IOWR('N', 0x81, struct nvme_uring_cmd)
+#define NVME_URING_CMD_ADMIN _IOWR('N', 0x82, struct nvme_uring_cmd)
+#define NVME_URING_CMD_ADMIN_VEC _IOWR('N', 0x83, struct nvme_uring_cmd)
 
 #if LIBURING_VERSION_MAJOR < 2
-static inline void io_uring_prep_nvme_cmd(struct io_uring_sqe *sqe, int fd,
-                                          struct nvme_passthru_cmd *cmd)
+static inline void io_uring_prep_nvme_cmd(struct io_uring_sqe *sqe, int fd)
 {
-    sqe->opcode = IORING_OP_NVME_CMD;
     sqe->fd = fd;
-    sqe->addr = (unsigned long)cmd;
-    sqe->len = sizeof(*cmd);
+    sqe->opcode = IORING_OP_URING_CMD;
+    sqe->cmd_op = NVME_URING_CMD_ADMIN;
 }
 #endif
 
@@ -44,7 +47,6 @@ struct request
     int cqe_res;
     struct iovec iov;
     std::unique_ptr<char[]> buf;
-    struct nvme_passthru_cmd cmd;
 };
 
 struct io_awaitable
@@ -71,6 +73,9 @@ struct io_awaitable
 
 class IOHandler
 {
+protected:
+    bool valid = false;
+
 public:
     virtual ~IOHandler() = default;
     virtual void prep_read(io_uring *ring, __u64 offset, __u32 len, request *req) = 0;
@@ -78,6 +83,26 @@ public:
     virtual const std::string &get_name() const = 0;
     virtual bool is_block_device() const = 0;
     virtual size_t get_size() const = 0;
+    bool is_valid() const { return valid; };
+};
+
+class DummyIOHandler : public IOHandler
+{
+    std::string name = "DummyIOHandler";
+
+public:
+    DummyIOHandler() = default;
+    void prep_read(io_uring *ring, __u64 offset, __u32 len, request *req) override
+    {
+        std::cout << "Dummy prep_read called with offset: " << offset << ", len: " << len << std::endl;
+    }
+    void prep_write(io_uring *ring, __u64 offset, __u32 len, request *req) override
+    {
+        std::cout << "Dummy prep_write called with offset: " << offset << ", len    : " << len << std::endl;
+    }
+    const std::string &get_name() const override { return name; }
+    bool is_block_device() const override { return false; }
+    size_t get_size() const override { return 0; }
 };
 
 class FileIOHandler : public IOHandler
@@ -87,18 +112,16 @@ class FileIOHandler : public IOHandler
     size_t file_size;
 
 public:
-    FileIOHandler(const std::string &p, bool is_source) : path(p)
+    FileIOHandler(const std::string &p, int fd, bool is_source) : path(p), fd(fd)
     {
-        int flags = is_source ? O_RDONLY : (O_WRONLY | O_CREAT | O_TRUNC);
-        fd = open(path.c_str(), flags, 0644);
-        if (fd < 0)
-            throw std::runtime_error("Failed to open file: " + path);
         struct stat file_stat;
         if (fstat(fd, &file_stat) < 0)
             throw std::runtime_error("Failed to get file size: " + path);
         file_size = file_stat.st_size;
         std::cout << "File size: " << file_size << " bytes" << std::endl;
+        valid = true;
     }
+
     ~FileIOHandler()
     {
         if (fd >= 0)
@@ -133,17 +156,16 @@ class NvmeIOHandler : public IOHandler
     size_t dev_size;
 
 public:
-    NvmeIOHandler(const std::string &p) : path(p)
+    NvmeIOHandler(const std::string &p, int fd) : path(p), fd(fd)
     {
-        fd = open(path.c_str(), O_RDWR);
-        if (fd < 0)
-            throw std::runtime_error("Failed to open NVMe device: " + path);
         unsigned long long bytes;
         if (ioctl(fd, BLKGETSIZE64, &bytes) != 0)
             throw std::runtime_error("Failed to identify NVMe device: " + path);
         dev_size = static_cast<size_t>(bytes);
         std::cout << "Device size: " << dev_size << " bytes" << std::endl;
+        valid = true;
     }
+
     ~NvmeIOHandler()
     {
         if (fd >= 0)
@@ -153,30 +175,30 @@ public:
     void prep_read(io_uring *ring, __u64 offset, __u32 len, request *req) override
     {
         io_uring_sqe *sqe = io_uring_get_sqe(ring);
-        auto &cmd = req->cmd;
-        memset(&cmd, 0, sizeof(cmd));
-        cmd.opcode = nvme_cmd_read;
-        cmd.nsid = 1;
-        cmd.addr = (__u64)req->buf.get();
-        cmd.data_len = len;
-        cmd.cdw10 = (offset / lba_size);
-        cmd.cdw12 = (len / lba_size) - 1;
-        io_uring_prep_nvme_cmd(sqe, fd, &cmd);
+        auto cmd = (struct nvme_uring_cmd *)&sqe->cmd;
+        memset(cmd, 0, sizeof(struct nvme_uring_cmd));
+        cmd->opcode = nvme_cmd_read;
+        cmd->nsid = 1;
+        cmd->addr = (__u64)req->buf.get();
+        cmd->data_len = len;
+        cmd->cdw10 = (offset / lba_size);
+        cmd->cdw12 = (len / lba_size) - 1;
+        io_uring_prep_nvme_cmd(sqe, fd);
         io_uring_sqe_set_data(sqe, req);
     }
 
     void prep_write(io_uring *ring, __u64 offset, __u32 len, request *req) override
     {
         io_uring_sqe *sqe = io_uring_get_sqe(ring);
-        auto &cmd = req->cmd;
-        memset(&cmd, 0, sizeof(cmd));
-        cmd.opcode = nvme_cmd_write;
-        cmd.nsid = 1;
-        cmd.addr = (__u64)req->buf.get();
-        cmd.data_len = len;
-        cmd.cdw10 = (offset / lba_size);
-        cmd.cdw12 = (len / lba_size) - 1;
-        io_uring_prep_nvme_cmd(sqe, fd, &cmd);
+        auto cmd = (struct nvme_uring_cmd *)sqe->cmd;
+        memset(cmd, 0, sizeof(struct nvme_uring_cmd));
+        cmd->opcode = nvme_cmd_write;
+        cmd->nsid = 1;
+        cmd->addr = (__u64)req->buf.get();
+        cmd->data_len = len;
+        cmd->cdw10 = (offset / lba_size);
+        cmd->cdw12 = (len / lba_size) - 1;
+        io_uring_prep_nvme_cmd(sqe, fd);
         io_uring_sqe_set_data(sqe, req);
     }
     const std::string &get_name() const override { return path; }
@@ -184,9 +206,6 @@ public:
     size_t get_size() const override { return dev_size; }
 };
 
-// --- 코루틴 로직 ---
-
-// ★★★ 수정 1: io_uring* ring을 파라미터로 다시 받도록 변경 ★★★
 task read_and_write_block(struct io_uring *ring, IOHandler &src, IOHandler &dest, __u64 offset, __u32 block_size, std::function<void()> on_complete)
 {
     request req;
@@ -199,9 +218,12 @@ task read_and_write_block(struct io_uring *ring, IOHandler &src, IOHandler &dest
         int bytes_read = co_await io_awaitable(&req);
         std::cout << "complete queue_rw_pair read: offset: " << offset << std::endl;
 
-        dest.prep_write(ring, offset, bytes_read, &req);
-        co_await io_awaitable(&req);
-        std::cout << "complete queue_rw_pair write: offset: " << offset << std::endl;
+        if (dest.is_valid())
+        {
+            dest.prep_write(ring, offset, bytes_read, &req);
+            co_await io_awaitable(&req);
+            std::cout << "complete queue_rw_pair write: offset: " << offset << std::endl;
+        }
     }
     catch (const std::runtime_error &e)
     {
@@ -224,15 +246,15 @@ task run_admin_identify(struct io_uring *ring, const std::string &dev_path, std:
 
     try
     {
-        auto &cmd = req.cmd;
-        memset(&cmd, 0, sizeof(cmd));
-        cmd.opcode = nvme_admin_identify;
-        cmd.addr = (__u64)req.buf.get();
-        cmd.data_len = 4096;
-        cmd.cdw10 = 1;
-
         io_uring_sqe *sqe = io_uring_get_sqe(ring);
-        io_uring_prep_nvme_cmd(sqe, fd, &cmd);
+        auto cmd = (struct nvme_uring_cmd *)sqe->cmd;
+        memset(cmd, 0, sizeof(struct nvme_uring_cmd));
+        cmd->opcode = nvme_admin_identify;
+        cmd->addr = (__u64)req.buf.get();
+        cmd->data_len = 4096;
+        cmd->cdw10 = 1;
+
+        io_uring_prep_nvme_cmd(sqe, fd);
         io_uring_sqe_set_data(sqe, &req);
 
         std::cout << "Submitting Identify Controller command..." << std::endl;
@@ -251,59 +273,93 @@ task run_admin_identify(struct io_uring *ring, const std::string &dev_path, std:
     on_complete();
 }
 
-// --- 이벤트 루프 및 main (변경 없음) ---
-
-void run_event_loop(struct io_uring *ring, int &inflight_ops)
+void run_copy_logic(IOHandler &src, IOHandler &dest, __u64 insize, int bs, int qd)
 {
-    while (inflight_ops > 0)
+    struct io_uring ring;
+    int ring_flags;
+    ring_flags = 0;
+    ring_flags |= IORING_SETUP_SQE128;
+    ring_flags |= IORING_SETUP_CQE32;
+
+    io_uring_queue_init(qd, &ring, 0);
+    std::cout << "Copying " << insize << " bytes from " << src.get_name();
+    if (dest.is_valid())
+        std::cout << " to " << dest.get_name() << "...";
+    std::cout << std::endl;
+
+    int inflight = 0;
+    int ret = 0;
+    __u64 offset = 0;
+
+    while (offset < insize)
     {
-        int ret = io_uring_submit(ring);
-        if (ret < 0)
+        while (inflight < qd && offset < insize)
         {
-            std::cerr << "io_uring_submit: " << strerror(-ret) << std::endl;
+            __u64 this_size = (insize - offset < static_cast<__u64>(bs)) ? (insize - offset) : bs;
+            read_and_write_block(&ring, src, dest, offset, this_size, [&]()
+                                 { inflight--; });
+            offset += this_size;
+            inflight++;
         }
 
-        struct io_uring_cqe *cqe;
-        ret = io_uring_wait_cqe(ring, &cqe);
-        if (ret < 0)
+        io_uring_submit(&ring);
+        int wait_count = (offset < insize && inflight > 0) ? 1 : inflight;
+        for (int i = 0; i < wait_count; ++i)
         {
-            if (-ret != EAGAIN)
-                std::cerr << "io_uring_wait_cqe: " << strerror(-ret) << std::endl;
-            // 에러가 발생해도 계속 진행하여 남은 요청을 처리
-            inflight_ops--;
-            continue;
-        }
+            struct io_uring_cqe *cqe;
+            ret = io_uring_wait_cqe(&ring, &cqe);
+            if (ret < 0)
+            {
+                if (-ret != EAGAIN)
+                    std::cerr << "io_uring_wait_cqe: " << strerror(-ret) << std::endl;
+                inflight--;
+                continue;
+            }
 
-        auto *req = static_cast<request *>(io_uring_cqe_get_data(cqe));
-        if (req)
-        {
-            req->cqe_res = cqe->res;
-            req->handle.resume();
+            auto *req = static_cast<request *>(io_uring_cqe_get_data(cqe));
+            if (req)
+            {
+                req->cqe_res = cqe->res;
+                req->handle.resume();
+            }
+            io_uring_cqe_seen(&ring, cqe);
+            std::cout << "Processed CQEs, inflight: " << inflight << std::endl;
         }
-        io_uring_cqe_seen(ring, cqe);
     }
+    std::cout << "Copy finished." << std::endl;
+    io_uring_queue_exit(&ring);
 }
 
-std::unique_ptr<IOHandler> create_handler(const std::string &arg, bool is_source)
+std::unique_ptr<IOHandler> create_handler(const std::string &path, bool is_source)
 {
-    size_t pos = arg.find(':');
-    if (pos == std::string::npos)
-        throw std::runtime_error("Invalid source/destination format. Use 'file:/path' or 'nvme:/dev/path'.");
-
-    std::string type = arg.substr(0, pos);
-    std::string path = arg.substr(pos + 1);
-
-    if (type == "file")
+    int flags = is_source ? O_RDONLY : (O_WRONLY | O_CREAT | O_TRUNC);
+    int fd = open(path.c_str(), flags, 0644);
+    if (fd < 0)
     {
-        return std::make_unique<FileIOHandler>(path, is_source);
+        std::cerr << "Error: " << strerror(errno) << std::endl;
+        return std::make_unique<DummyIOHandler>();
     }
-    else if (type == "nvme")
+
+    struct stat st;
+    if (fstat(fd, &st) < 0)
+        throw std::runtime_error("Failed to stat file: " + path);
+
+    if (S_ISREG(st.st_mode))
     {
-        return std::make_unique<NvmeIOHandler>(path);
+        return std::make_unique<FileIOHandler>(path, fd, is_source);
+    }
+    else if (S_ISBLK(st.st_mode))
+    {
+        return NULL;
+    }
+    else if (S_ISCHR(st.st_mode))
+    {
+        return std::make_unique<NvmeIOHandler>(path, fd);
     }
     else
     {
-        throw std::runtime_error("Unknown type: " + type);
+        close(fd);
+        throw std::runtime_error("Unknown type of file: " + path);
     }
 }
 
@@ -335,38 +391,12 @@ int main(int argc, char *argv[])
             auto src_handler = create_handler(argv[2], true);
             auto dest_handler = create_handler(argv[3], false);
             __u64 insize = std::stoull(argv[4]) * 1024 * 1024;
-            int bs = (argc >= 6) ? std::stoi(argv[5]) * 1024 : 128 * 1024;
+            int bs = (argc >= 6) ? std::stoi(argv[5]) : 128 * 1024;
             int qd = (argc >= 7) ? std::stoi(argv[6]) : 16;
-            if (src_handler->get_size() < insize)
+            if (src_handler->get_size() && src_handler->get_size() < insize)
                 insize = src_handler->get_size();
 
-            if ((src_handler->is_block_device() || dest_handler->is_block_device()) && (bs % 512 != 0))
-            {
-                throw std::runtime_error("Block size must be a multiple of 512 for NVMe devices.");
-            }
-
-            io_uring_queue_init(qd, &ring, 0);
-            std::cout << "Copying " << insize << " bytes from " << src_handler->get_name()
-                      << " to " << dest_handler->get_name() << std::endl;
-
-            int inflight = 0;
-            __u64 offset = 0;
-
-            while (offset < insize)
-            {
-                while (inflight < qd && offset < insize)
-                {
-                    __u32 this_size = (insize - offset < bs) ? (insize - offset) : bs;
-                    // ★★★ 수정 3: ring 포인터를 명시적으로 전달 ★★★
-                    read_and_write_block(&ring, *src_handler, *dest_handler, offset, this_size, [&]()
-                                         { inflight--; });
-                    offset += this_size;
-                    inflight++;
-                }
-                run_event_loop(&ring, inflight);
-            }
-
-            std::cout << "Copy finished." << std::endl;
+            run_copy_logic(*src_handler, *dest_handler, insize, bs, qd);
         }
         else if (command == "admin" && argc >= 4 && std::string(argv[2]) == "identify")
         {
@@ -374,7 +404,7 @@ int main(int argc, char *argv[])
             int inflight = 1;
             run_admin_identify(&ring, argv[3], [&]()
                                { inflight--; });
-            run_event_loop(&ring, inflight);
+            // run_copy_logic(&ring, inflight);
         }
         else
         {
@@ -389,7 +419,5 @@ int main(int argc, char *argv[])
             io_uring_queue_exit(&ring);
         return 1;
     }
-
-    io_uring_queue_exit(&ring);
     return 0;
 }

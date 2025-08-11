@@ -17,8 +17,10 @@ int main(int argc, char *argv[])
     // std::locale::global(std::locale(""));
 
     ArgParser parser("Copy and Compare test. ver. 0.1.0");
+    parser.add_positional("command", "Command to excute.", true);
+    parser.add_positional("source", "Source file or device path.", true);
     parser.add_option("--time", "-t", "test time (unit: min)", false, "2");
-    parser.add_option("--src", "-s", "source directory path", true);
+    // parser.add_option("--src", "-s", "source directory path", true);
     parser.add_option("--dest", "-d", "destination directory path", true);
     parser.add_option("--thread", "-T", "thread count", false, "5");
     parser.add_flag("--test", "", "for test. used time unit as minute");
@@ -28,7 +30,9 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    auto source = parser.get("src").value();
+    auto cmd = parser.get_positional("command").value();
+    auto source = parser.get_positional("source").value();
+    // auto source = parser.get("src").value();
     std::vector<std::string> destlist = split(parser.get("dest").value(), ',');
     auto dest_count = destlist.size();
     auto multithread = std::stoi(parser.get("thread").value());

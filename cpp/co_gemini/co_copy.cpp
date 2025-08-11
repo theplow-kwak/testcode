@@ -73,6 +73,9 @@ struct io_awaitable
 
 class IOHandler
 {
+protected:
+    bool valid = false;
+
 public:
     virtual ~IOHandler() = default;
     virtual void prep_read(io_uring *ring, __u64 offset, __u32 len, request *req) = 0;
@@ -80,6 +83,26 @@ public:
     virtual const std::string &get_name() const = 0;
     virtual bool is_block_device() const = 0;
     virtual size_t get_size() const = 0;
+    bool is_valid() const { return valid; };
+};
+
+class DummyIOHandler : public IOHandler
+{
+    std::string name = "DummyIOHandler";
+
+public:
+    DummyIOHandler() = default;
+    void prep_read(io_uring *ring, __u64 offset, __u32 len, request *req) override
+    {
+        std::cout << "Dummy prep_read called with offset: " << offset << ", len: " << len << std::endl;
+    }
+    void prep_write(io_uring *ring, __u64 offset, __u32 len, request *req) override
+    {
+        std::cout << "Dummy prep_write called with offset: " << offset << ", len    : " << len << std::endl;
+    }
+    const std::string &get_name() const override { return name; }
+    bool is_block_device() const override { return false; }
+    size_t get_size() const override { return 0; }
 };
 
 class FileIOHandler : public IOHandler
@@ -89,18 +112,16 @@ class FileIOHandler : public IOHandler
     size_t file_size;
 
 public:
-    FileIOHandler(const std::string &p, bool is_source) : path(p)
+    FileIOHandler(const std::string &p, int fd, bool is_source) : path(p), fd(fd)
     {
-        int flags = is_source ? O_RDONLY : (O_WRONLY | O_CREAT | O_TRUNC);
-        fd = open(path.c_str(), flags, 0644);
-        if (fd < 0)
-            throw std::runtime_error("Failed to open file: " + path);
         struct stat file_stat;
         if (fstat(fd, &file_stat) < 0)
             throw std::runtime_error("Failed to get file size: " + path);
         file_size = file_stat.st_size;
         std::cout << "File size: " << file_size << " bytes" << std::endl;
+        valid = true;
     }
+
     ~FileIOHandler()
     {
         if (fd >= 0)
@@ -177,14 +198,13 @@ class NvmeIOHandler : public IOHandler
     struct nvme_data nvme_data;
 
 public:
-    NvmeIOHandler(const std::string &p) : path(p)
+    NvmeIOHandler(const std::string &p, int fd) : path(p), fd(fd)
     {
-        fd = open(path.c_str(), O_RDWR);
-        if (fd < 0)
-            throw std::runtime_error("Failed to open NVMe device: " + path);
         if (get_file_size() != 0)
             throw std::runtime_error("Failed to identify NVMe device: " + path);
+        valid = true;
     }
+
     ~NvmeIOHandler()
     {
         if (fd >= 0)
@@ -194,8 +214,8 @@ public:
     void prep_read(io_uring *ring, __u64 offset, __u32 len, request *req) override
     {
         io_uring_sqe *sqe = io_uring_get_sqe(ring);
-        auto cmd = (struct nvme_uring_cmd *)sqe->cmd;
-        memset(&cmd, 0, sizeof(cmd));
+        auto cmd = (struct nvme_uring_cmd *)&sqe->cmd;
+        memset(cmd, 0, sizeof(struct nvme_uring_cmd));
         cmd->opcode = CUST_CONTROLLER_TO_HOST;
         cmd->nsid = nvme_data.nsid;
         cmd->addr = (__u64)req->buf.get();
@@ -213,7 +233,7 @@ public:
     {
         io_uring_sqe *sqe = io_uring_get_sqe(ring);
         auto cmd = (struct nvme_uring_cmd *)sqe->cmd;
-        memset(&cmd, 0, sizeof(cmd));
+        memset(cmd, 0, sizeof(struct nvme_uring_cmd));
         cmd->opcode = CUST_HOST_TO_CONTROLLER;
         cmd->nsid = nvme_data.nsid;
         cmd->addr = (__u64)req->buf.get();
@@ -273,9 +293,12 @@ task read_and_write_block(struct io_uring *ring, IOHandler &src, IOHandler &dest
         int bytes_read = co_await io_awaitable(&req);
         std::cout << "complete queue_rw_pair read: offset: " << offset << std::endl;
 
-        dest.prep_write(ring, offset, bytes_read, &req);
-        co_await io_awaitable(&req);
-        std::cout << "complete queue_rw_pair write: offset: " << offset << std::endl;
+        if (dest.is_valid())
+        {
+            dest.prep_write(ring, offset, bytes_read, &req);
+            co_await io_awaitable(&req);
+            std::cout << "complete queue_rw_pair write: offset: " << offset << std::endl;
+        }
     }
     catch (const std::runtime_error &e)
     {
@@ -325,26 +348,96 @@ task run_admin_identify(struct io_uring *ring, const std::string &dev_path, std:
     close(fd);
     on_complete();
 }
-std::unique_ptr<IOHandler> create_handler(const std::string &arg, bool is_source)
+
+void run_copy_logic(IOHandler &src, IOHandler &dest, __u64 insize, int bs, int qd)
 {
-    size_t pos = arg.find(':');
-    if (pos == std::string::npos)
-        throw std::runtime_error("Invalid source/destination format. Use 'file:/path' or 'nvme:/dev/path'.");
+    struct io_uring ring;
+    int ring_flags;
+    ring_flags = 0;
+    ring_flags |= IORING_SETUP_SQE128;
+    ring_flags |= IORING_SETUP_CQE32;
 
-    std::string type = arg.substr(0, pos);
-    std::string path = arg.substr(pos + 1);
+    io_uring_queue_init(qd, &ring, 0);
+    std::cout << "Copying " << insize << " bytes from " << src.get_name();
+    if (dest.is_valid())
+        std::cout << " to " << dest.get_name() << "...";
+    std::cout << std::endl;
 
-    if (type == "file")
+    int inflight = 0;
+    int ret = 0;
+    __u64 offset = 0;
+
+    while (offset < insize)
     {
-        return std::make_unique<FileIOHandler>(path, is_source);
+        while (inflight < qd && offset < insize)
+        {
+            __u64 this_size = (insize - offset < static_cast<__u64>(bs)) ? (insize - offset) : bs;
+            read_and_write_block(&ring, src, dest, offset, this_size, [&]()
+                                 { inflight--; });
+
+            std::cout << "read_and_write_block called with offset: " << offset << ", size: " << this_size << ", inflight: " << inflight << std::endl;
+            offset += this_size;
+            inflight++;
+        }
+
+        io_uring_submit(&ring);
+        int wait_count = (offset < insize && inflight > 0) ? 1 : inflight;
+        for (int i = 0; i < wait_count; ++i)
+        {
+            struct io_uring_cqe *cqe;
+            ret = io_uring_wait_cqe(&ring, &cqe);
+            if (ret < 0)
+            {
+                if (-ret != EAGAIN)
+                    std::cerr << "io_uring_wait_cqe: " << strerror(-ret) << std::endl;
+                inflight--;
+                continue;
+            }
+
+            auto *req = static_cast<request *>(io_uring_cqe_get_data(cqe));
+            if (req)
+            {
+                req->cqe_res = cqe->res;
+                req->handle.resume();
+            }
+            io_uring_cqe_seen(&ring, cqe);
+            std::cout << "Processed CQEs, inflight: " << inflight << std::endl;
+        }
     }
-    else if (type == "nvme")
+    std::cout << "Copy finished." << std::endl;
+    io_uring_queue_exit(&ring);
+}
+
+std::unique_ptr<IOHandler> create_handler(const std::string &path, bool is_source)
+{
+    int flags = is_source ? O_RDONLY : (O_WRONLY | O_CREAT | O_TRUNC);
+    int fd = open(path.c_str(), flags, 0644);
+    if (fd < 0)
     {
-        return std::make_unique<NvmeIOHandler>(path);
+        std::cerr << "Error: " << strerror(errno) << std::endl;
+        return std::make_unique<DummyIOHandler>();
+    }
+
+    struct stat st;
+    if (fstat(fd, &st) < 0)
+        throw std::runtime_error("Failed to stat file: " + path);
+
+    if (S_ISREG(st.st_mode))
+    {
+        return std::make_unique<FileIOHandler>(path, fd, is_source);
+    }
+    else if (S_ISBLK(st.st_mode))
+    {
+        return NULL;
+    }
+    else if (S_ISCHR(st.st_mode))
+    {
+        return std::make_unique<NvmeIOHandler>(path, fd);
     }
     else
     {
-        throw std::runtime_error("Unknown type: " + type);
+        close(fd);
+        throw std::runtime_error("Unknown type of file: " + path);
     }
 }
 
@@ -357,90 +450,6 @@ void print_usage(const char *prog_name)
     std::cerr << "    <device>: /dev/nvme0" << std::endl;
 }
 
-void run_copy_logic(IOHandler &src, IOHandler &dest, __u64 insize, int bs, int qd)
-{
-    struct io_uring ring;
-    struct io_uring_params params = {};
-
-    params.flags |= IORING_SETUP_SQPOLL;
-    params.sq_thread_idle = 20000;
-
-    std::cout << "try io_uring_queue_init_params: flags " << params.flags << std::endl;
-    if (io_uring_queue_init_params(qd, &ring, &params) < 0)
-    {
-        params = {}; // SQPOLL 실패 시 플래그 초기화
-        std::cout << "try io_uring_queue_init_params: flags " << params.flags << std::endl;
-        if (io_uring_queue_init_params(qd, &ring, &params) < 0)
-            throw std::runtime_error("io_uring_queue_init failed.");
-        std::cout << "Note: SQPOLL not supported, running in normal mode." << std::endl;
-    }
-
-    int inflight = 0;
-    __u64 offset = 0;
-    bool all_submitted = false;
-
-    std::cout << "Copying " << insize << " bytes from " << src.get_name()
-              << " to " << dest.get_name() << "..." << std::endl;
-
-    // 통합 이벤트 루프
-    while (inflight > 0 || !all_submitted)
-    {
-        // 1. 제출 단계: 큐에 공간이 있으면 최대한 제출
-        while (inflight < qd && !all_submitted)
-        {
-            __u64 this_size = (insize - offset < static_cast<__u64>(bs)) ? (insize - offset) : bs;
-            if (this_size == 0)
-            {
-                all_submitted = true;
-                break;
-            }
-            read_and_write_block(&ring, src, dest, offset, this_size, [&]()
-                                 { inflight--; });
-
-            std::cout << "read_and_write_block called with offset: " << offset << ", size: " << this_size << ", inflight: " << inflight << std::endl;
-            offset += this_size;
-            inflight++;
-        }
-
-        // 2. 제출 및 대기 결정
-        int submitted = 0;
-        // 큐가 꽉 찼거나, 모든 작업을 제출했다면 반드시 wait 해야 함
-        if (inflight >= qd || (all_submitted && inflight > 0))
-        {
-            std::cout << "try io_uring_submit_and_wait: flags " << params.flags << " inflight: " << inflight << std::endl;
-            submitted = io_uring_submit_and_wait(&ring, 1);
-        }
-        else
-        {
-            std::cout << "try io_uring_submit: flags " << params.flags << " inflight: " << inflight << std::endl;
-            submitted = io_uring_submit(&ring);
-        }
-
-        std::cout << "Submitted " << submitted << " requests, inflight: " << inflight << std::endl;
-        if (submitted < 0)
-        {
-            throw std::runtime_error("io_uring_submit failed: " + std::string(strerror(-submitted)));
-        }
-
-        // 3. 완료 처리 (CQE 일괄 처리)
-        unsigned cqe_head;
-        struct io_uring_cqe *cqe;
-        io_uring_for_each_cqe(&ring, cqe_head, cqe)
-        {
-            auto *req = static_cast<request *>(io_uring_cqe_get_data(cqe));
-            if (req)
-            {
-                req->cqe_res = cqe->res;
-                req->handle.resume();
-            }
-        }
-        io_uring_cq_advance(&ring, io_uring_cq_ready(&ring));
-        std::cout << "Processed CQEs, inflight: " << inflight << std::endl;
-    }
-    std::cout << "Copy finished." << std::endl;
-    io_uring_queue_exit(&ring);
-}
-
 int main(int argc, char *argv[])
 {
     Logger logger(LogLevel::DEBUG);
@@ -451,6 +460,7 @@ int main(int argc, char *argv[])
     parser.add_option("--lr", "-l", "Limited Retry (LR): 1-limited retry efforts, 0-apply all available error recovery", false, "0");
     parser.add_option("--slba", "-s", "64-bit address of the first logical block", true);
     parser.add_option("--nlb", "-n", "The number of LBAs to return", false);
+    parser.add_option("--filename", "-f", "File name to save raw binary", false);
     parser.add_option("--bs", "-c", "block size", false, "512");
     parser.add_option("--depth", "-d", "io depth", false, "64");
     parser.add_option("--time", "-t", "test time (unit: min)", false, "2");
@@ -460,23 +470,20 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    std::string command = argv[1];
-
     try
     {
-        auto source = parser.get("source").value();
-        auto src_handler = create_handler(source, true);
-        auto dest_handler = create_handler(argv[3], false);
-        __u64 insize = std::stoull(argv[4]) * 1024 * 1024;
-        int bs = (argc >= 6) ? std::stoi(argv[5]) * 1024 : 128 * 1024;
-        int qd = (argc >= 7) ? std::stoi(argv[6]) : 16;
-        if (src_handler->get_size() < insize)
+        auto source = parser.get_positional("source").value();
+        auto filename = parser.get("filename").value_or("");
+        __u64 insize = std::stoi(parser.get("nlb").value_or("0"));
+        int bs = std::stoi(parser.get("bs").value_or("256"));
+        int qd = std::stoi(parser.get("depth").value_or("32"));
+
+        std::unique_ptr<IOHandler> src_handler, dest_handler; // Declare unique_ptr for both source
+        src_handler = create_handler(source, true);
+        dest_handler = create_handler(filename, false);
+        if (src_handler->get_size() && src_handler->get_size() < insize)
             insize = src_handler->get_size();
 
-        if ((src_handler->is_block_device() || dest_handler->is_block_device()) && (bs % 512 != 0))
-        {
-            throw std::runtime_error("Block size must be a multiple of 512 for NVMe devices.");
-        }
         run_copy_logic(*src_handler, *dest_handler, insize, bs, qd);
     }
     catch (const std::exception &e)

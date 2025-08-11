@@ -1,34 +1,27 @@
-CC=g++
-
-# Default build type is release
-BUILD_TYPE ?= release
-
-ifeq ($(BUILD_TYPE),debug)
-    CPPFLAGS := -O0 -g -Wall
-	override CPPFLAGS += -static -std=c++2a
-else
-    CPPFLAGS := -O3 -Wall
-    override CPPFLAGS += -static -std=c++2a
-endif
-
+CXX=g++
 SRCS = test.cpp
-OBJS = $(SRCS:%.cpp=%.o)
-
 TARGET = test
 
-.SUFFIXES : .cpp .o
+CXXFLAGS = -std=c++2a -Wall
 
-all : $(TARGET)
+RELEASE_FLAGS = -O2
+DEBUG_FLAGS = -g -O0
 
-$(TARGET) : $(OBJS)
-	$(CC) -o $(TARGET) $(OBJS) $(INC) $(LIBS)
+.PHONY: all release debug clean
 
-%.o: %.cpp
-	$(CC) $(CPPFLAGS) $(INC) -o $@ -c $<
-	
-depend:
-	gccmakedep $(SRCS)
-   
+all: release
+
+release: $(SRCS)
+	@echo "Building release version..."
+	$(CXX) $(CXXFLAGS) $(RELEASE_FLAGS) -o $(TARGET) $(SRCS) $(LIBS)
+	@echo "Release build finished: $(TARGET)"
+
+debug: $(SRCS)
+	@echo "Building debug version..."
+	$(CXX) $(CXXFLAGS) $(DEBUG_FLAGS) -o $(TARGET) $(SRCS) $(LIBS)
+	@echo "Debug build finished: $(TARGET)"
+
 clean:
-	rm -f $(OBJS) $(TARGET)
-
+	@echo "Cleaning up..."
+	rm -f $(TARGET) $(TARGET) *.o
+	@echo "Cleanup finished."
