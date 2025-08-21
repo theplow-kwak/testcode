@@ -16,8 +16,8 @@
             "type": "cppdbg",
             "request": "launch",
             "program": "${fileDirname}\\${fileBasenameNoExtension}",
-            "args": ["~/vm/ubuntu/noble.qcow2", "./test.img", "10000"],
-            "stopAtEntry": false,
+            "args": ["copy", "./co_copy", "./temp.ttt", "10000"],
+            "stopAtEntry": true,
             "cwd": "${fileDirname}",
             "environment": [],
             "externalConsole": false,
@@ -36,15 +36,13 @@
             ]
         },
         {
-            "name": "(gdb) Launch clive",
+            "name": "(gdb) Launch as sudo",
             "type": "cppdbg",
             "request": "launch",
-            "program": "${workspaceFolder}/.build/clive",
-            "args": [
-                "fdp", "multi-nsr", "/dev/nvme0", "--nsid", "1", "--slba", "0", "--nlb", "5000", "--lr", "0", "--bs", "256", "-v"
-            ],
+            "program": "${fileDirname}\\${fileBasenameNoExtension}",
+            "args": ["/dev/nvme0", "--nsid", "1", "--slba", "0", "--nlb", "10000", "--lr", "0", "--bs", "256", "--depth", "16"],
             "stopAtEntry": true,
-            "cwd": "${workspaceFolder}/.build",
+            "cwd": "${fileDirname}",
             "externalConsole": false,
             "miDebuggerPath": "/usr/bin/gdb",
             "MIMode": "gdb",
@@ -65,6 +63,14 @@
                     "ignoreFailures": true
                 }
             ],
+        },
+        {
+            "name": "Python Debugger: Current File",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            "args": ["/dev/nvme1", "after"],
         }
     ]
 }

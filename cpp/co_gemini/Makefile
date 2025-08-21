@@ -11,12 +11,12 @@
 CXX = g++
 SRCS = co_copy.cpp
 
-CXXFLAGS = -std=c++2a -Wall
+CXXFLAGS = -std=c++2a -Wall -static
 LIBS = -luring -lnvme
 
 TARGET = co_copy
 
-RELEASE_FLAGS = -O2 -DNDEBUG
+RELEASE_FLAGS = -O2
 DEBUG_FLAGS = -g -O0 -DDEBUG
 
 .PHONY: all release debug clean

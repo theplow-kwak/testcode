@@ -16,14 +16,6 @@
 
 Logger logger(LogLevel::INFO);
 
-static __u64 time_get_ns(void)
-{
-    struct timespec ts;
-
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return ts.tv_sec * 1000000000ull + ts.tv_nsec;
-}
-
 /* io_uring async commands: */
 #define NVME_URING_CMD_IO _IOWR('N', 0x80, struct nvme_uring_cmd)
 #define NVME_URING_CMD_IO_VEC _IOWR('N', 0x81, struct nvme_uring_cmd)
@@ -369,65 +361,85 @@ task run_admin_identify(struct io_uring *ring, const std::string &dev_path, std:
 void run_copy_logic(IOHandler &src, IOHandler &dest, __u64 insize, int bs, int qd)
 {
     struct io_uring ring;
-    int ring_flags;
-    ring_flags = 0;
-    ring_flags |= IORING_SETUP_SQE128;
-    ring_flags |= IORING_SETUP_CQE32;
+    struct io_uring_params params = {};
 
-    io_uring_queue_init(qd, &ring, ring_flags);
+    params.flags |= IORING_SETUP_SQE128 | IORING_SETUP_CQE32 | IORING_SETUP_SQPOLL;
+    params.sq_thread_idle = 20000;
+
+    logger.debug("try io_uring_queue_init_params: flags {}", params.flags);
+    if (io_uring_queue_init_params(qd, &ring, &params) < 0)
+    {
+        params = {}; // SQPOLL 실패 시 플래그 초기화
+        logger.debug("try io_uring_queue_init_params: flags {}", params.flags);
+        if (io_uring_queue_init_params(qd, &ring, &params) < 0)
+            throw std::runtime_error("io_uring_queue_init failed.");
+        logger.debug("Note: SQPOLL not supported, running in normal mode.");
+    }
+
     if (dest.is_valid())
         logger.info("Copying {} bytes from {} to {}", insize, src.get_name(), dest.get_name());
     else
         logger.info("Copying {} bytes from {}", insize, src.get_name());
 
     int inflight = 0;
-    int ret = 0;
-    int iocount = 0;
     __u64 offset = 0;
-    __u64 progress = 0;
-    __u64 time_tag = time_get_ns();
+    bool all_submitted = false;
 
-    while (offset < insize)
+    // 통합 이벤트 루프
+    while (inflight > 0 || !all_submitted)
     {
-        while (inflight < qd && offset < insize)
+        // 1. 제출 단계: 큐에 공간이 있으면 최대한 제출
+        while (inflight < qd && !all_submitted)
         {
             __u64 this_size = (insize - offset < static_cast<__u64>(bs)) ? (insize - offset) : bs;
+            if (this_size == 0)
+            {
+                all_submitted = true;
+                break;
+            }
             read_and_write_block(&ring, src, dest, offset, this_size, [&]()
                                  { inflight--; });
 
             logger.debug("read_and_write_block called with offset: {}, size: {}, inflight: {}", offset, this_size, inflight);
             offset += this_size;
-            progress += this_size;
             inflight++;
-            iocount++;
         }
 
-        io_uring_submit(&ring);
-        int wait_count = (offset < insize && inflight > 0) ? 1 : inflight;
-        for (int i = 0; i < wait_count; ++i)
+        // 2. 제출 및 대기 결정
+        int submitted = 0;
+        // 큐가 꽉 찼거나, 모든 작업을 제출했다면 반드시 wait 해야 함
+        if (inflight >= qd || (all_submitted && inflight > 0))
         {
-            struct io_uring_cqe *cqe;
-            ret = io_uring_wait_cqe(&ring, &cqe);
-            if (ret < 0)
-            {
-                if (-ret != EAGAIN)
-                    logger.error("io_uring_wait_cqe: {}", strerror(-ret));
-                inflight--;
-                continue;
-            }
+            logger.debug("try io_uring_submit_and_wait: flags {} inflight {}", params.flags, inflight);
+            submitted = io_uring_submit_and_wait(&ring, 1);
+        }
+        else
+        {
+            logger.debug("try io_uring_submit: flags {} inflight {}", params.flags, inflight);
+            submitted = io_uring_submit(&ring);
+        }
 
+        logger.debug("Submitted {} requests, inflight {}", submitted, inflight);
+        if (submitted < 0)
+        {
+            throw std::runtime_error("io_uring_submit failed: " + std::string(strerror(-submitted)));
+        }
+
+        // 3. 완료 처리 (CQE 일괄 처리)
+        unsigned cqe_head;
+        struct io_uring_cqe *cqe;
+        io_uring_for_each_cqe(&ring, cqe_head, cqe)
+        {
             auto *req = static_cast<request *>(io_uring_cqe_get_data(cqe));
             if (req)
             {
                 req->cqe_res = cqe->res;
                 req->handle.resume();
             }
-            io_uring_cqe_seen(&ring, cqe);
-            logger.debug("Processed CQEs, inflight: {}", inflight);
         }
+        io_uring_cq_advance(&ring, io_uring_cq_ready(&ring));
+        logger.debug("Processed CQEs, inflight: {}", inflight);
     }
-    time_tag = time_get_ns() - time_tag;
-    printf("  It took %d IOs, %lld sectors, %.3f seconds. %.2f MB/s\n", iocount, progress, (float)time_tag / 1000000000, (progress * 512) / ((float)time_tag / 1000));
     logger.debug("Copy finished.");
     io_uring_queue_exit(&ring);
 }

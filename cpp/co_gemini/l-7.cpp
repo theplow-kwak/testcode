@@ -29,6 +29,8 @@ struct request
 {
     std::coroutine_handle<> handle;
     int cqe_res;
+    __u64 slba;
+    char rw_dir;
     struct iovec iov;
     std::unique_ptr<char[]> buf;
 };
@@ -42,7 +44,7 @@ struct io_awaitable
     void await_suspend(std::coroutine_handle<> h)
     {
         req->handle = h;
-        std::cout << "await_suspend: " << h.address() << std::endl;
+        std::cout << "await_suspend: " << req->rw_dir << " " << req->slba << std::endl;
     }
     int await_resume() const
     {
@@ -50,7 +52,7 @@ struct io_awaitable
         {
             throw std::runtime_error(strerror(-req->cqe_res));
         }
-        std::cout << "await_resume: " << req->cqe_res << std::endl;
+        std::cout << "await_resume: " << req->rw_dir << " " << req->slba << std::endl;
         return req->cqe_res;
     }
 };
@@ -63,6 +65,8 @@ struct read_awaitable : public io_awaitable
               .buf = std::make_unique<char[]>(len)})
     {
         req->iov = {.iov_base = req->buf.get(), .iov_len = len};
+        req->rw_dir = 'R';
+        req->slba = offset;
         struct io_uring_sqe *sqe = io_uring_get_sqe(ring);
         io_uring_prep_readv(sqe, infd, &req->iov, 1, offset);
         io_uring_sqe_set_data(sqe, req);
@@ -77,6 +81,7 @@ struct write_awaitable : public io_awaitable
     write_awaitable(struct io_uring *ring, request *read_req, __u32 len, __u64 offset)
         : io_awaitable(read_req) // 읽기 요청의 버퍼를 재사용
     {
+        req->rw_dir = 'W';
         struct io_uring_sqe *sqe = io_uring_get_sqe(ring);
         io_uring_prep_writev(sqe, outfd, &req->iov, 1, offset);
         io_uring_sqe_set_data(sqe, req);
@@ -178,8 +183,6 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    __u64 insize = std::stoull(argv[3]) * 1024 * 1024;
-
     struct stat st;
     if (fstat(infd, &st) < 0)
     {
@@ -189,13 +192,14 @@ int main(int argc, char *argv[])
         return 1;
     }
 
+    __u64 insize = std::stoull(argv[3]);
     if (static_cast<__u64>(st.st_size) < insize)
     {
         insize = static_cast<__u64>(st.st_size);
     }
 
-    int bs = 128 * 1024;
-    int qd = 32;
+    int bs = (argc >= 5) ? std::stoi(argv[4]) : 256;
+    int qd = (argc >= 6) ? std::stoi(argv[5]) : 16;
 
     struct io_uring ring;
     if (io_uring_queue_init(qd, &ring, 0) < 0)
