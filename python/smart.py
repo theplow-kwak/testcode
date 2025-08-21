@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 
+import argparse
 import csv
 import logging
 import os
 import re
+import shutil
 
 from openpyxl import load_workbook
 
@@ -11,6 +13,7 @@ from command_runner import CommandRunner
 
 # 로깅 설정
 logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # 상수 변수 설정
 CURRENT_PATH = os.path.dirname(os.path.abspath(__file__))
@@ -24,12 +27,13 @@ LOG_INFO = logging.INFO
 class nvme_common:
     def __init__(self, hostRoot, ostype="Linux"):
         self.status = {}  # Dictionary that keeps status such as fna,nsze
-        self.hostRoot = hostRoot if hostRoot else CommandRunner()
+        self.hostRoot = hostRoot if hostRoot else CommandRunner(logger=logger)
         self.ostype = ostype
+        self.nvme_cli = "./clive" if shutil.which("./clive") else "nvme"
 
     def run(self, target_dev, opt_main, opt_sub="", ignoreError=False):
         sudo = "" if os.geteuid() == 0 else "sudo "
-        cmd = f"{sudo}nvme {opt_main.strip()} {target_dev.strip()} {opt_sub.strip()}"
+        cmd = f"{sudo}{self.nvme_cli} {opt_main.strip()} {target_dev.strip()} {opt_sub.strip()}"
         return self.hostRoot.VmExec(cmd, ignoreError)
 
     def get_log(self, target_dev, log_id, namespace="", length=""):
@@ -111,7 +115,7 @@ class SmartData:
             dev_part_value = dev_part_match.group(1)
             project_code = next((key for key in self.smart_criteria[0].keys() if key is not None and re.search(dev_part_value, key, re.IGNORECASE)), None)
         if not project_code:
-            project_code = next((key for key in self.smart_criteria[0].keys() if key is not None and re.search("SSD01", key, re.IGNORECASE)), None)
+            project_code = next((key for key in self.smart_criteria[0].keys() if key is not None and re.search("PCB01", key, re.IGNORECASE)), None)
         return project_code
 
     def evaluate_condition(self, value_before, value_after, conditions):
@@ -155,10 +159,10 @@ class SmartData:
                 result = criteria["criteria"] if self.evaluate_condition(value_before, value_after, condition) else "PASS"
                 if result.upper().strip() == "WARNING":
                     self.warning_count += 1
-                    logging.warning(f"SMART:WARNING - {customer_code},{byte_offset},{description},{condition}: {value_before} <==> {value_after}")
+                    logger.warning(f"SMART:WARNING - {customer_code},{byte_offset},{description},{condition}: {value_before} <==> {value_after}")
                 elif result.upper().strip() == "FAIL":
                     self.fail_count += 1
-                    logging.error(f"SMART:FAIL - {customer_code},{byte_offset},{description},{condition}: {value_before} <==> {value_after}")
+                    logger.error(f"SMART:FAIL - {customer_code},{byte_offset},{description},{condition}: {value_before} <==> {value_after}")
             if value_before_obj and value_after_obj:
                 self.csv_writer.writerow([customer_code, byte_offset, value_before_obj["hex_value"], value_after_obj["hex_value"], description, result])
             else:
@@ -185,10 +189,10 @@ class SmartData:
 
         summary_file.close()
         if self.fail_count > 0:
-            logging.error(f"[SMART][{customer_code}][{project_code}] Test Failed - Warning: {self.warning_count}, Fail: {self.fail_count}")
+            logger.error(f"[SMART][{customer_code}][{project_code}] Test Failed - Warning: {self.warning_count}, Fail: {self.fail_count}")
             return False
         else:
-            logging.info(f"[SMART][{customer_code}][{project_code}] Test Passed - Warning: {self.warning_count}, Fail: {self.fail_count}")
+            logger.info(f"[SMART][{customer_code}][{project_code}] Test Passed - Warning: {self.warning_count}, Fail: {self.fail_count}")
             return True
 
     def get_bytes(self, data, byte_offset):
@@ -234,7 +238,7 @@ class SmartData:
 
     def get_log_page(self, customer_code):
         log_id, log_length = {
-            "SSD": ["0xFE", 8192],
+            "SKH": ["0xFE", 8192],
             "HP": ["0xC7", 512],
             "MS": ["0xC0", 512],
             "LENOVO": ["0xDF", 512],
@@ -243,7 +247,7 @@ class SmartData:
 
         raw_data = self.nvme.get_log(self.target_device, log_id=log_id, length=log_length)
         if re.match(r"NVMe status: Invalid", raw_data, re.IGNORECASE):
-            logging.info(f"Can't get SMART log for {customer_code}({log_id})\n")
+            logger.info(f"Can't get SMART log for {customer_code}({log_id})\n")
             smart_data = ["00"] * log_length
         else:
             smart_data = []
@@ -277,7 +281,7 @@ class SmartData:
 
     def save_smart_data(self, step="before"):
         if self.target_device is None:
-            logging.info("Target device not specified")
+            logger.info("Target device not specified")
             return
         filename = self.smart_before_fname if step == "before" else self.smart_after_fname
         with open(filename, "w", newline="") as smart_file:
@@ -289,18 +293,38 @@ class SmartData:
             self.parse_smart_data(smart_data, "NVME")
             self.parse_smart_data(smart_data, nvme_customer_code)
 
-            customer_codes = ["HP", "MS", "LENOVO", "DELL", "SSD"]
+            customer_codes = ["HP", "MS", "LENOVO", "DELL", "SKH"]
             for code in customer_codes:
                 smart_data = self.get_log_page(code)
-                self.parse_smart_data(smart_data, code)
+                if len(smart_data):
+                    self.parse_smart_data(smart_data, code)
 
             wai, waf = self.get_wai_waf(smart_data[512:])
             self.csv_writer.writerow(["WAI", "000", f"{wai:.6f}", f"{wai:.6f}", "[ETC] (ec_slc_total + ec_tlc_total) / write_from_host"])
             self.csv_writer.writerow(["WAF", "000", f"{waf:.6f}", f"{waf:.6f}", "[ETC] (written_to_tlc_user + written_to_slc_buf) / write_from_host"])
 
 
+def main():
+    parser = argparse.ArgumentParser(description="Get and compare SMART data for NVMe devices.")
+    parser.add_argument("params", type=str, nargs="*", default=None, help="set Device and Step (ex. '/dev/nvme1', 'after /dev/nvme1' or 'after')")
+    parser.add_argument("-l", "--log", type=str, default="info", help="Set logging level (debug, info, warning, error, critical)")
+    args = parser.parse_args()
+    logger.setLevel(args.log.upper())
+
+    step = "before"
+    target_device = "/dev/nvme0"
+    for param in args.params:
+        if re.match(r".*(nvme\d+)", param):
+            target_device = param
+        if param in ["before", "after"]:
+            step = param
+
+    smart_comparer = SmartData("", target_device=target_device)
+    smart_comparer.save_smart_data(step)
+    if step == "after":
+        smart_comparer.compare_smart_data()
+
+
 # 사용 예시
 if __name__ == "__main__":
-    smart_comparer = SmartData("", target_device="/dev/nvme0")
-    smart_comparer.save_smart_data()
-    smart_comparer.compare_smart_data()
+    main()

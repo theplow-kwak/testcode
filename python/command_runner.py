@@ -6,6 +6,7 @@ import subprocess
 from typing import Optional
 
 logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
+cmd_logger = logging.getLogger(__name__)
 
 
 VM_LOG_MSG_TYPE_CRITICAL = 50
@@ -22,35 +23,37 @@ VM_LOG_MSG_TYPE_NOTSET = 0
 class VmCommon:
     @staticmethod
     def LogMsg(msg: str, msgType: int = VM_LOG_MSG_TYPE_INFO, logfd: Optional[object] = None):
+        logger = logfd if logfd else cmd_logger
         if msgType in (VM_LOG_MSG_TYPE_CRITICAL, VM_LOG_MSG_TYPE_FATAL):
-            logging.critical(msg)
+            logger.critical(msg)
         elif msgType == VM_LOG_MSG_TYPE_ERROR:
-            logging.error(msg)
+            logger.error(msg)
         elif msgType in (VM_LOG_MSG_TYPE_WARNING, VM_LOG_MSG_TYPE_WARN):
-            logging.warning(msg)
+            logger.warning(msg)
         elif msgType == VM_LOG_MSG_TYPE_INFO:
-            logging.info(msg)
+            logger.info(msg)
         elif msgType in (VM_LOG_MSG_TYPE_DEBUG, VM_LOG_MSG_TYPE_DIAG, VM_LOG_MSG_TYPE_NOTSET):
-            logging.debug(msg)
+            logger.debug(msg)
         else:
-            logging.info(msg)
+            logger.info(msg)
 
 
 class CommandRunner:
-    def __init__(self, ignoreError: bool = False, return_stdout: bool = True, background: bool = False):
+    def __init__(self, ignoreError: bool = False, return_stdout: bool = True, background: bool = False, logger = cmd_logger):
         self.ignoreError = ignoreError
         self.return_stdout = return_stdout
         self.background = background
         self.returncode = None
         self.lastOut = ""
         self.sudo_cmd = "sudo " if os.geteuid() != 0 else ""
+        self.logger = logger
 
     def run_command(self, cmd: str, ignoreError: Optional[bool] = None) -> Optional[str]:
         """Run a shell command and handle errors."""
         cmd_args = shlex.split(cmd)
         ignoreError = ignoreError or self.ignoreError
         try:
-            logging.debug(f"Executing command: {cmd_args}")
+            self.logger.debug(f"Executing command: {cmd_args}")
             if self.background:
                 subprocess.Popen(cmd_args)
                 return None
@@ -140,7 +143,7 @@ class CommandRunner:
             fail_word = "%s FAILED" % func_cmd
             if not tcId:
                 tcId = func_cmd
-            logging.info(f"BeginTestCase: {tcId} - {tcDesc}")
+            self.logger.info(f"BeginTestCase: {tcId} - {tcDesc}")
             if func_cmd:
                 self.VmExec(func_cmd)
             if pass_word:
@@ -150,13 +153,13 @@ class CommandRunner:
                     self.CheckResponse_cnt(pass_word, pass_word_cnt, fail_word, exitOnFailure=True)
             if fail_check_word:
                 self.CheckNoResponse(fail_check_word, fail_word, exitOnFailure=True)
-            logging.info(f"EndTestCase")
+            self.logger.info(f"EndTestCase")
         else:
             if not tcId:
                 tcId = func_cmd.__name__
-            logging.info(f"BeginTestCase: {tcId} - {tcDesc}")
+            self.logger.info(f"BeginTestCase: {tcId} - {tcDesc}")
             result = func_cmd(*arg_list) if arg_list else func_cmd()
-            logging.info(f"EndTestCase")
+            self.logger.info(f"EndTestCase")
             return result
 
     def CheckNoResponse(
