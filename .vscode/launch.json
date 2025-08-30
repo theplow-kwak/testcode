@@ -16,7 +16,7 @@
             "type": "cppdbg",
             "request": "launch",
             "program": "${fileDirname}\\${fileBasenameNoExtension}",
-            "args": ["copy", "./co_copy", "./temp.ttt", "10000"],
+            "args": ["~/vm/windows/nvme0n1.qcow2", "4094"],
             "stopAtEntry": true,
             "cwd": "${fileDirname}",
             "environment": [],
